@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Dict, Any, Union
 
 class EventAuditLogger:
-    def __init__(self, log_path: Union[str, Path] = "events.jsonl"):
+    def __init__(self, log_path: Union[str, Path] = "events.jsonl", enabled: bool = False):
         self.log_path = Path(log_path)
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.enabled = enabled
+        if self.enabled:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
         self.total_events = 0
         self.emitted_events = 0
         self.discarded_english = 0
@@ -50,6 +52,9 @@ class EventAuditLogger:
             self.discarded_english += 1
         elif classification == "HALLUCINATION_OR_NOISE":
             self.discarded_hallucination += 1
+
+        if not self.enabled:
+            return
 
         entry = {
             "timestamp": time.time(),

@@ -8,7 +8,7 @@ import numpy as np
 import soundfile as sf
 import websockets
 
-async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://localhost:8765"):
+async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://127.0.0.1:8765"):
     print(f"\n=== SIMULATING YOUTUBE AUDIO PLAYBACK ===")
     print(f"Audio file: {wav_path}")
     print(f"Slice: {start_sec:.2f}s -> {start_sec + duration_sec:.2f}s ({duration_sec:.2f}s)")
@@ -26,8 +26,8 @@ async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, 
 
     async with websockets.connect(ws_url) as ws:
         print("[+] Connected to WhatTube WebSocket server!")
-        # Send initial video time sync
-        await ws.send(json.dumps({"type": "sync", "video_time": start_sec}))
+        # Send session initialization handshake
+        await ws.send(json.dumps({"type": "init", "video_time": start_sec, "target_lang": "en"}))
 
         async def listen_for_captions():
             try:

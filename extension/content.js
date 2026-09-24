@@ -2,7 +2,9 @@
 
 let overlayContainer = null;
 let activeCard = null;
-let dismissTimeout = null;
+let activeCardDismissVideoTime = null;
+let wallClockFallbackTimer = null;
+let lastSyncWallTime = 0.0;
 
 const LANGUAGE_NAMES = {
   id: "Indonesian",
@@ -36,20 +38,48 @@ function ensureOverlayContainer() {
   return overlayContainer;
 }
 
+function clearActiveCard() {
+  if (wallClockFallbackTimer) {
+    clearTimeout(wallClockFallbackTimer);
+    wallClockFallbackTimer = null;
+  }
+  activeCardDismissVideoTime = null;
+
+  if (activeCard) {
+    const cardToRemove = activeCard;
+    activeCard = null;
+    cardToRemove.classList.add("whattube-fade-out");
+    setTimeout(() => {
+      if (cardToRemove.parentNode) {
+        cardToRemove.parentNode.removeChild(cardToRemove);
+      }
+    }, 350);
+  }
+}
+
 function displayCaption(caption) {
   const container = ensureOverlayContainer();
   if (!container) return;
 
-  if (dismissTimeout) {
-    clearTimeout(dismissTimeout);
-    dismissTimeout = null;
-  }
-
   const langCode = (caption.language || "unknown").toLowerCase();
   const langName = LANGUAGE_NAMES[langCode] || langCode.toUpperCase();
+  const isUpdate = caption.action === "update";
 
-  // If active card exists, smoothly morph text in-place
-  if (activeCard && activeCard.parentNode) {
+  // Timeline-bound dismiss time (in video seconds)
+  const video = document.querySelector("video");
+  const targetEndSec = typeof caption.end === "number" ? caption.end : (video ? video.currentTime + 3.0 : 0.0);
+  activeCardDismissVideoTime = targetEndSec + 2.5;
+
+  // Reset wall-clock safety fallback (12s maximum in case playback stops entirely)
+  if (wallClockFallbackTimer) {
+    clearTimeout(wallClockFallbackTimer);
+  }
+  wallClockFallbackTimer = setTimeout(() => {
+    clearActiveCard();
+  }, 12000);
+
+  // If protocol specifies UPDATE and active card exists, morph in-place
+  if (isUpdate && activeCard && activeCard.parentNode) {
     const transEl = activeCard.querySelector(".whattube-translation");
     const origEl = activeCard.querySelector(".whattube-original");
     const badgeEl = activeCard.querySelector(".whattube-badge");
@@ -59,20 +89,14 @@ function displayCaption(caption) {
       origEl.textContent = `“${caption.original}”`;
       if (badgeEl) badgeEl.textContent = langCode;
       activeCard.classList.remove("whattube-fade-out");
-
-      // Reset auto-dismiss timer
-      const displayDurationMs = Math.max(4500, (caption.end - caption.start + 2.5) * 1000);
-      dismissTimeout = setTimeout(() => {
-        activeCard.classList.add("whattube-fade-out");
-        setTimeout(() => {
-          if (activeCard && activeCard.parentNode) {
-            activeCard.parentNode.removeChild(activeCard);
-          }
-          activeCard = null;
-        }, 400);
-      }, displayDurationMs);
       return;
     }
+  }
+
+  // Otherwise, clear previous card and create new card
+  if (activeCard && activeCard.parentNode) {
+    activeCard.parentNode.removeChild(activeCard);
+    activeCard = null;
   }
 
   const card = document.createElement("div");
@@ -95,20 +119,6 @@ function displayCaption(caption) {
 
   container.appendChild(card);
   activeCard = card;
-
-  // Auto-dismiss after display duration (minimum 4.5s)
-  const displayDurationMs = Math.max(4500, (caption.end - caption.start + 2.0) * 1000);
-  dismissTimeout = setTimeout(() => {
-    card.classList.add("whattube-fade-out");
-    setTimeout(() => {
-      if (card.parentNode) {
-        card.parentNode.removeChild(card);
-      }
-      if (activeCard === card) {
-        activeCard = null;
-      }
-    }, 400);
-  }, displayDurationMs);
 }
 
 function escapeHtml(str) {
@@ -121,36 +131,67 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
+function sendVideoSync(isSeek = false) {
+  const video = document.querySelector("video");
+  if (!video) return;
+
+  lastSyncWallTime = performance.now();
+  chrome.runtime.sendMessage({
+    type: isSeek ? "VIDEO_SEEK" : "VIDEO_SYNC",
+    video_time: video.currentTime,
+    playback_rate: video.playbackRate || 1.0,
+  }).catch(() => {});
+}
+
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "DISPLAY_CAPTION") {
+  if (message.type === "CAPTURE_STARTED") {
+    sendVideoSync(false);
+    sendResponse({ synced: true });
+  } else if (message.type === "CAPTURE_STOPPED") {
+    clearActiveCard();
+    sendResponse({ stopped: true });
+  } else if (message.type === "DISPLAY_CAPTION") {
     displayCaption(message.payload);
     sendResponse({ received: true });
   }
 });
 
-// Watch for video seeks and play events to sync timestamps with server
+// Watch video events to synchronize timestamps and lifecycle
 function initVideoListeners() {
   const video = document.querySelector("video");
-  if (video) {
-    video.addEventListener("play", () => {
-      chrome.runtime.sendMessage({
-        type: "VIDEO_SYNC",
-        video_time: video.currentTime,
-      }).catch(() => {});
-    });
+  if (!video) return;
 
-    video.addEventListener("seeking", () => {
-      if (activeCard && activeCard.parentNode) {
-        activeCard.parentNode.removeChild(activeCard);
-        activeCard = null;
+  // Send immediate sync on start
+  sendVideoSync(false);
+
+  video.addEventListener("play", () => {
+    sendVideoSync(false);
+  });
+
+  video.addEventListener("ratechange", () => {
+    sendVideoSync(false);
+  });
+
+  video.addEventListener("seeking", () => {
+    clearActiveCard();
+    sendVideoSync(true);
+  });
+
+  video.addEventListener("timeupdate", () => {
+    const now = performance.now();
+    // Resync timeline every 2.5s during continuous playback
+    if (now - lastSyncWallTime > 2500) {
+      sendVideoSync(false);
+    }
+
+    // Dismiss active card only when video playback actually crosses dismissVideoTime
+    if (activeCard && activeCardDismissVideoTime !== null) {
+      if (video.currentTime >= activeCardDismissVideoTime) {
+        clearActiveCard();
       }
-      chrome.runtime.sendMessage({
-        type: "VIDEO_SEEK",
-        video_time: video.currentTime,
-      }).catch(() => {});
-    });
-  }
+    }
+  });
 }
 
 // Initialize on DOM ready

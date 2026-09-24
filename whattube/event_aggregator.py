@@ -152,3 +152,16 @@ class DynamicEventAggregator:
         if self.is_active:
             return self._finalize_event(current_time)
         return None
+
+    def reset(self):
+        """Reset aggregator state upon seek or session reset."""
+        self.history.clear()
+        self.is_active = False
+        self.cur_event_id = None
+        self.event_start_time = 0.0
+        self.event_last_active_time = 0.0
+        self.cur_trigger_windows = []
+
+# Alias for backward compatibility
+SpeechEvent = AudioEvent
+

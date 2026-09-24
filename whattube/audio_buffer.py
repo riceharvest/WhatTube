@@ -11,7 +11,7 @@ class AudioRingBuffer:
         self.buffer = np.zeros(self.capacity_samples, dtype=np.float32)
         self.write_pos = 0
         self.total_samples = 0
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
     def append(self, pcm_data: np.ndarray) -> Tuple[float, float]:
         """
@@ -49,45 +49,48 @@ class AudioRingBuffer:
         with self.lock:
             return self.total_samples / self.sample_rate
 
+    def _get_slice_unlocked(self, start_sec: float, end_sec: float) -> Optional[np.ndarray]:
+        cur_time = self.total_samples / self.sample_rate
+        oldest_time = max(0.0, cur_time - (self.capacity_samples / self.sample_rate))
+
+        # Clamp or validate range
+        if end_sec <= oldest_time or start_sec >= cur_time:
+            return None
+
+        req_start = max(start_sec, oldest_time)
+        req_end = min(end_sec, cur_time)
+
+        n_samples = int(round((req_end - req_start) * self.sample_rate))
+        if n_samples <= 0:
+            return None
+
+        # Calculate index relative to current write_pos
+        samples_ago = int(round((cur_time - req_start) * self.sample_rate))
+        idx_start = (self.write_pos - samples_ago) % self.capacity_samples
+
+        if idx_start + n_samples <= self.capacity_samples:
+            out = self.buffer[idx_start : idx_start + n_samples].copy()
+        else:
+            first_part = self.capacity_samples - idx_start
+            out = np.empty(n_samples, dtype=np.float32)
+            out[:first_part] = self.buffer[idx_start:]
+            out[first_part:] = self.buffer[: n_samples - first_part]
+
+        return out
+
     def get_slice(self, start_sec: float, end_sec: float) -> Optional[np.ndarray]:
         """
         Extract a contiguous float32 slice between [start_sec, end_sec].
         Returns None if requested range is unavailable (e.g. purged from ring).
         """
         with self.lock:
-            cur_time = self.total_samples / self.sample_rate
-            oldest_time = max(0.0, cur_time - (self.capacity_samples / self.sample_rate))
-
-            # Clamp or validate range
-            if end_sec <= oldest_time or start_sec >= cur_time:
-                return None
-
-            req_start = max(start_sec, oldest_time)
-            req_end = min(end_sec, cur_time)
-
-            n_samples = int(round((req_end - req_start) * self.sample_rate))
-            if n_samples <= 0:
-                return None
-
-            # Calculate index relative to current write_pos
-            samples_ago = int(round((cur_time - req_start) * self.sample_rate))
-            idx_start = (self.write_pos - samples_ago) % self.capacity_samples
-
-            if idx_start + n_samples <= self.capacity_samples:
-                out = self.buffer[idx_start : idx_start + n_samples].copy()
-            else:
-                first_part = self.capacity_samples - idx_start
-                out = np.empty(n_samples, dtype=np.float32)
-                out[:first_part] = self.buffer[idx_start:]
-                out[first_part:] = self.buffer[: n_samples - first_part]
-
-            return out
+            return self._get_slice_unlocked(start_sec, end_sec)
 
     def get_latest(self, duration_sec: float) -> Optional[np.ndarray]:
         """Get the most recent N seconds of audio."""
         with self.lock:
             cur_time = self.total_samples / self.sample_rate
-            return self.get_slice(cur_time - duration_sec, cur_time)
+            return self._get_slice_unlocked(cur_time - duration_sec, cur_time)
 
     def reset(self):
         with self.lock:

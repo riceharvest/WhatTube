@@ -22,11 +22,11 @@ Rather than wasting compute running continuous heavy models or fragile acoustic 
 
 ```
                   YouTube Video Stream (Browser Tab Audio)
-                                     │
+                                     │ (AudioWorklet 16kHz PCM)
                                      ▼
                 ┌───────────────────────────────────────────┐
-                │ CPU Stage 1: Continuous Ring Buffer       │
-                │ (5950X / Host CPU, <5% single-core load)  │
+                │ SessionState (Isolated Per-Tab Worker)    │
+                │ Dedicated Ring Buffer, VAD & LID State    │
                 │                                           │
                 │ 1. Energy & Silero VAD Filter             │ ~2 ms
                 │ 2. sherpa-onnx Whisper Tiny INT8 LID     │ ~53 ms
@@ -35,17 +35,19 @@ Rather than wasting compute running continuous heavy models or fragile acoustic 
                 │    - 2-in-3 Suspicious (p < 0.55)         │ -> Queue Event
                 │    - Extremely Non-English (p < 0.20)     │ -> Immediate Trigger
                 └────────────────────┬──────────────────────┘
-                                     │ (Average: 1.45 events / minute)
+                                     │ (Average: ~1.45 events / minute)
                                      ▼
                 ┌───────────────────────────────────────────┐
                 │ Dynamic Event Aggregator & Coalescer      │
                 │ - Dynamic 3-10s adaptive burst duration   │
                 │ - 1.0s pre-roll + 0.5s post-roll padding  │
+                │ - Epoch checking (discards on seek/reset) │
                 └────────────────────┬──────────────────────┘
                                      │
-                                     ▼ (0.31% GPU duty cycle)
+                                     ▼ (Serialized GPU Semaphore Queue)
                 ┌───────────────────────────────────────────┐
                 │ GPU Stage 2: Hardware-Agnostic ASR        │
+                │ (CUDA / Apple MPS / Intel XPU / CPU)     │
                 │ Target VRAM: <= 1.54 GB                   │
                 │                                           │
                 │ Resident Whisper large-v3-turbo FP16      │ ~127 ms
@@ -55,7 +57,7 @@ Rather than wasting compute running continuous heavy models or fragile acoustic 
                                      ▼
                 ┌───────────────────────────────────────────┐
                 │ CPU Stage 3: Low-Footprint Translation    │
-                │ (MarianMT on CPU: src_lang -> target_lang)│ ~50-80 ms
+                │ (CTranslate2 INT8 on CPU with LRU cache)  │ ~50-80 ms
                 │ - 0 MB VRAM, leaves GPU 100% free         │
                 └────────────────────┬──────────────────────┘
                                      │
@@ -67,19 +69,22 @@ Rather than wasting compute running continuous heavy models or fragile acoustic 
 
 ---
 
-## Empirical Benchmark Highlights
+## Empirical Benchmark Highlights (Reference Baseline)
 
 Evaluated on a continuous **41-minute, 15-second** travel vlog recorded on location in Jakarta, Indonesia (`P13mMiIL_2I`):
 
 | Metric | Result | Impact |
 |---|---|---|
-| **CPU LID Speed** | **53.8 ms** per 3s window | $18.5\times$ faster than real-time on 4 threads |
+| **CPU LID Speed** | **53.8 ms** per 3s window | $18.5\times$ faster than real-time on 4 CPU threads |
 | **GPU Event Reduction** | **2,472 windows $\to$ 60 bursts** | **97.6% reduction** in GPU activations |
 | **Ground-Truth Chatter Recall** | **100%** (3/3 segments) | 0 false-negative misses on known local chatter |
-| **GPU VRAM Footprint** | **1,543.7 MB (1.54 GB)** | Runs on standard laptops and budget GPUs |
+| **GPU VRAM Footprint** | **1,543.7 MB (1.54 GB)** | Runs comfortably alongside LLMs or budget GPUs |
 | **GPU Inference Latency** | **127.44 ms** per 5s burst | Near-instantaneous caption turnaround |
-| **B70 GPU Duty Cycle** | **0.308%** | **99.69% GPU idle** across the 41-minute playback |
-| **CPU Translation Latency** | **<80 ms** | 0 MB VRAM consumed for LLM translation |
+| **GPU Duty Cycle** | **0.308%** | **99.69% GPU idle** across the 41-minute playback |
+| **CPU Translation Latency** | **<80 ms** | 0 MB VRAM consumed for multilingual translation |
+
+> [!NOTE]
+> This 41-minute Jakarta vlog serves as our empirical baseline smoke test. Broad-spectrum evaluations across varied recording environments, accents, and background music are ongoing.
 
 ---
 
@@ -88,8 +93,12 @@ Evaluated on a continuous **41-minute, 15-second** travel vlog recorded on locat
 ### 1. Requirements
 * Linux / macOS / Windows
 * Python 3.10+
-* GPU: Intel Arc (via XPU / OpenVINO), NVIDIA (CUDA), Apple Silicon (MPS/CoreML), or CPU fallback
-* Chrome or Brave browser
+* GPU Acceleration (auto-detected):
+  * **NVIDIA** (CUDA)
+  * **Apple Silicon** (Metal / MPS)
+  * **Intel Arc / Data Center** (XPU / OpenVINO)
+  * **CPU Fallback**
+* Chrome, Brave, or Chromium-based browser
 
 ### 2. Clone and Setup Environment
 ```bash
@@ -99,43 +108,65 @@ cd WhatTube
 # Create virtual environment and install dependencies
 uv venv --python python3.12 .venv
 source .venv/bin/activate
-uv pip install -e .
+uv pip install -e ".[dev]"
+
+# Download quantized Whisper Tiny INT8 LID models (~75 MB)
+./scripts/download_models.sh
 ```
 
-### 3. Start the Pipeline
+### 3. Run the Test Suite
+Verify that ring buffers, ASR contracts, session isolation, and translation caching pass:
+```bash
+pytest tests/ -v
+```
+
+### 4. Start the Pipeline
 Start both the resident GPU ASR daemon and the WebSocket server:
 ```bash
-# Launch server (auto-spawns ASR daemon)
+# Launch server (auto-spawns ASR daemon if not already running)
 ./scripts/start_server.sh
 ```
 
-### 4. Load the Chrome Extension
+Or run the ASR daemon independently:
+```bash
+# Native Python daemon
+./scripts/start_asr_daemon.sh --native
+
+# Or in a container
+./scripts/start_asr_daemon.sh --docker
+```
+
+### 5. Load the Chrome Extension
 1. Open Chrome or Brave and navigate to `chrome://extensions/`.
 2. Enable **Developer mode** (toggle in top-right).
 3. Click **Load unpacked** and select the `WhatTube/extension` directory.
 4. Pin the **WhatTube** icon to your toolbar.
-5. Open any YouTube travel vlog, click the WhatTube icon, and press **Start Listening**!
+5. Open any YouTube travel vlog, select your preferred target language in the popup, click **Start Listening**, and enjoy!
 
 ---
 
-## Key Architectural Highlights & Breakthroughs
+## Key Architectural Highlights
 
-1. **Acoustic Breath-Pause VAD Splitting:**
+1. **Per-Tab Session Isolation (`SessionState`):**
+   - Each connected browser tab maintains completely independent `AudioRingBuffer`, `EnergyAndSileroVAD`, `WhisperTinyLID`, and `DynamicEventAggregator` instances.
+   - Audio PCM and subtitles never cross-contaminate between tabs.
+
+2. **Stream Epoch Invalidation:**
+   - Whenever a user seeks, scrubs, pauses, or resets playback, the tab's stream epoch is incremented.
+   - In-flight background ASR bursts and translation tasks verify the epoch before submission and emission; stale predictions from previous video timestamps are automatically dropped.
+
+3. **Acoustic Breath-Pause VAD Splitting:**
    - In travel footage, foreground hosts often trail off in English (e.g. *"Goodbye!"*) right before background locals speak. Passing the full slice into Whisper causes the English tokens to dominate the cross-attention layers.
    - WhatTube uses Silero VAD energy valleys ($p < 0.30$) to detect natural acoustic breath pauses between speakers and decouple them into sub-bursts. The English segment is recognized by Turbo ASR and silently dropped; the foreign segment is cleanly transcribed and translated.
 
-2. **CTranslate2 INT8 Multilingual Translation Engine:**
+4. **CTranslate2 INT8 Multilingual Translation Engine:**
    - Drops translation latency from **~600 ms (PyTorch MarianMT CPU) to ~50 ms (CTranslate2 INT8)**.
-   - Uses zero GPU VRAM and takes only ~72 MB RAM, allowing instant CPU translation across multiple language pairs (`id->en`, `es->en`, `fr->en`, `ja->en`, etc.) with transparent automatic caching and fallback.
+   - Thread-safe bounded LRU model cache (`max_cached_models=3`), consuming only ~72 MB RAM per active language pair with zero GPU VRAM.
 
-3. **Multi-Window Agreement & Hallucination Filter:**
-   - Consecutive overlapping 3s analysis windows are cross-referenced using word-overlap consensus.
-   - Low-SNR Whisper noise hallucinations (e.g. *"Thank you for watching"*, isolated punctuation) are suppressed.
-   - Adjacent window extensions are flagged as `[UPDATE]` actions so captions smoothly morph in-place rather than flashing duplicate subtitle cards.
-
-4. **Bidirectional Video Time Synchronization:**
-   - The Manifest V3 extension synchronizes the WebSocket server with YouTube's `video.currentTime` on start and seek events.
-   - Emitted subtitle cards carry exact video timestamps, stay visible when the video is paused, and auto-dismiss relative to video playback.
+5. **AudioWorklet & Manifest V3 Lifecycle Resilience:**
+   - Capture runs through a dedicated `AudioWorkletProcessor` delivering clean 16 kHz single-channel PCM without main-thread audio glitching.
+   - Extension state is stored in `chrome.storage.session`, surviving Chrome Manifest V3 service worker suspensions.
+   - Subtitle lifecycles are directly bound to YouTube video time, auto-dismissing cleanly and pausing whenever the video pauses.
 
 ---
 
@@ -153,32 +184,40 @@ Start both the resident GPU ASR daemon and the WebSocket server:
 ```
 WhatTube/
 ├── whattube/
-│   ├── audio_buffer.py        # Rolling ring buffer with pre/post-roll extraction
+│   ├── audio_buffer.py        # Rolling ring buffer with pre/post-roll extraction (RLock protected)
 │   ├── vad.py                 # Fast energy gate + Silero VAD
 │   ├── lid.py                 # Sub-55ms Whisper Tiny INT8 language identification
 │   ├── event_aggregator.py    # Dynamic 3-10s adaptive burst state machine
 │   ├── logger.py              # Event audit precision & diagnostic logger
 │   ├── asr/
-│   │   ├── resident_daemon.py # Persistent GPU Whisper microservice
+│   │   ├── resident_daemon.py # Persistent GPU Whisper microservice (CUDA/MPS/XPU/CPU)
 │   │   └── client.py          # Fast HTTP client to resident worker
 │   ├── translation/
-│   │   └── marian.py          # Dynamic multilingual CPU translator
-│   └── server.py              # WebSocket server & pipeline coordinator
+│   │   └── marian.py          # Dynamic multilingual CTranslate2 INT8 CPU translator
+│   └── server.py              # WebSocket server & SessionState coordinator
 ├── extension/                 # Manifest V3 Chrome/Brave Extension
 │   ├── manifest.json
-│   ├── background.js          # Service worker
-│   ├── offscreen.js           # Real-time tab audio capture & resampling
-│   ├── content.js             # YouTube player DOM subtitle injection
-│   └── popup/                 # User settings and toggle UI
+│   ├── background.js          # Service worker with chrome.storage.session persistence
+│   ├── offscreen.js           # Real-time tab audio capture & AudioWorklet pipeline
+│   ├── pcm-worklet-processor.js # Low-overhead 16kHz PCM audio worklet
+│   ├── content.js             # YouTube player DOM subtitle injection & timeline sync
+│   └── popup/                 # User settings, language selector, and toggle UI
 ├── scripts/
+│   ├── download_models.sh     # Fetch quantized Whisper Tiny INT8 ONNX models
 │   ├── start_server.sh        # Server launch script
-│   ├── start_asr_daemon.sh    # Resident GPU worker launcher
+│   ├── start_asr_daemon.sh    # Resident GPU worker launcher (native/docker)
+│   ├── stop_asr_daemon.sh     # Clean shutdown for ASR worker
 │   └── simulate_youtube_stream.py # Real-time playback test harness
 └── tests/
-    └── test_event_aggregator.py
+    ├── test_audio_buffer.py       # Ring buffer append, wrap, slice, deadlock prevention
+    ├── test_event_aggregator.py   # Burst detection and window coalescing tests
+    ├── test_session_isolation.py  # Multi-client isolation & epoch cancellation tests
+    ├── test_asr_contract.py       # ASR daemon endpoint contract & resampling tests
+    └── test_translation.py       # CTranslate2 translation & LRU cache tests
 ```
 
 ---
 
 ## License
 MIT License. See [LICENSE](LICENSE) for details.
+

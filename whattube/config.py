@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 import os
 
 @dataclass
@@ -28,13 +29,15 @@ class Config:
     post_roll_sec: float = 0.5           # Post-roll padding after event end
     close_hangover_sec: float = 0.8      # Delay after clean English before closing
     min_event_sec: float = 3.0           # Minimum burst duration for linguistic coherence
-    max_event_sec: float = 5.0           # Optimal Whisper Turbo context window (prevents host domination)
+    max_event_sec: float = 8.0           # Maximum adaptive burst duration (prevents host context domination)
 
-    # Service endpoints
+    # Service endpoints & security
     asr_endpoint: str = os.getenv("WHATTUBE_ASR_ENDPOINT", "http://127.0.0.1:8766/transcribe")
-    ws_host: str = os.getenv("WHATTUBE_WS_HOST", "0.0.0.0")
+    ws_host: str = os.getenv("WHATTUBE_WS_HOST", "127.0.0.1")  # Safe localhost default
     ws_port: int = int(os.getenv("WHATTUBE_WS_PORT", "8765"))
     target_language: str = os.getenv("WHATTUBE_TARGET_LANG", "en")
+    auth_token: Optional[str] = os.getenv("WHATTUBE_AUTH_TOKEN", None)  # Optional shared token
+    enable_transcript_log: bool = os.getenv("WHATTUBE_ENABLE_LOG", "0") in ("1", "true", "True")  # Opt-in for privacy
 
     # Paths
     base_dir: Path = Path(__file__).resolve().parent.parent
