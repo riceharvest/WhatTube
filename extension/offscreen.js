@@ -14,6 +14,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     startAudioProcessing(message.streamId);
   } else if (message.type === 'STOP_CAPTURE') {
     stopAudioProcessing();
+  } else if (message.type === 'SEND_CONTROL') {
+    if (websocket && websocket.readyState === WebSocket.OPEN) {
+      websocket.send(JSON.stringify(message.data));
+    }
   }
 });
 

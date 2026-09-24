@@ -26,6 +26,8 @@ async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, 
 
     async with websockets.connect(ws_url) as ws:
         print("[+] Connected to WhatTube WebSocket server!")
+        # Send initial video time sync
+        await ws.send(json.dumps({"type": "sync", "video_time": start_sec}))
 
         async def listen_for_captions():
             try:

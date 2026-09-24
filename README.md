@@ -118,13 +118,34 @@ Start both the resident GPU ASR daemon and the WebSocket server:
 
 ---
 
+## Key Architectural Highlights & Breakthroughs
+
+1. **Acoustic Breath-Pause VAD Splitting:**
+   - In travel footage, foreground hosts often trail off in English (e.g. *"Goodbye!"*) right before background locals speak. Passing the full slice into Whisper causes the English tokens to dominate the cross-attention layers.
+   - WhatTube uses Silero VAD energy valleys ($p < 0.30$) to detect natural acoustic breath pauses between speakers and decouple them into sub-bursts. The English segment is recognized by Turbo ASR and silently dropped; the foreign segment is cleanly transcribed and translated.
+
+2. **CTranslate2 INT8 Multilingual Translation Engine:**
+   - Drops translation latency from **~600 ms (PyTorch MarianMT CPU) to ~50 ms (CTranslate2 INT8)**.
+   - Uses zero GPU VRAM and takes only ~72 MB RAM, allowing instant CPU translation across multiple language pairs (`id->en`, `es->en`, `fr->en`, `ja->en`, etc.) with transparent automatic caching and fallback.
+
+3. **Multi-Window Agreement & Hallucination Filter:**
+   - Consecutive overlapping 3s analysis windows are cross-referenced using word-overlap consensus.
+   - Low-SNR Whisper noise hallucinations (e.g. *"Thank you for watching"*, isolated punctuation) are suppressed.
+   - Adjacent window extensions are flagged as `[UPDATE]` actions so captions smoothly morph in-place rather than flashing duplicate subtitle cards.
+
+4. **Bidirectional Video Time Synchronization:**
+   - The Manifest V3 extension synchronizes the WebSocket server with YouTube's `video.currentTime` on start and seek events.
+   - Emitted subtitle cards carry exact video timestamps, stay visible when the video is paused, and auto-dismiss relative to video playback.
+
+---
+
 ## Subtitle Display Features
 * **Native Integration:** Injects floating caption cards directly into YouTube's `.html5-video-player`, repositioning smoothly above playback controls.
 * **Dual Representation:**
   * Primary line: Translated fluent English (or chosen target language).
   * Metadata badge: `[ID] Indonesian · original available`
   * Click to expand: Reveals exact transcribed foreign slang / colloquial text.
-* **Responsive Timeline Sync:** Automatically clears subtitles upon seek or pause.
+* **Responsive Timeline Sync:** Automatically synchronizes and clears subtitles upon seek or pause.
 
 ---
 

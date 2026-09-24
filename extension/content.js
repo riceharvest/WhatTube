@@ -45,6 +45,9 @@ function displayCaption(caption) {
     dismissTimeout = null;
   }
 
+  const langCode = (caption.language || "unknown").toLowerCase();
+  const langName = LANGUAGE_NAMES[langCode] || langCode.toUpperCase();
+
   // If active card exists, smoothly morph text in-place
   if (activeCard && activeCard.parentNode) {
     const transEl = activeCard.querySelector(".whattube-translation");
@@ -74,9 +77,6 @@ function displayCaption(caption) {
 
   const card = document.createElement("div");
   card.className = "whattube-card";
-
-  const langCode = (caption.language || "unknown").toLowerCase();
-  const langName = LANGUAGE_NAMES[langCode] || langCode.toUpperCase();
 
   card.innerHTML = `
     <div class="whattube-translation">${escapeHtml(caption.translation)}</div>
@@ -129,15 +129,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-// Watch for video seeks to clear stale subtitles
+// Watch for video seeks and play events to sync timestamps with server
 function initVideoListeners() {
   const video = document.querySelector("video");
   if (video) {
+    video.addEventListener("play", () => {
+      chrome.runtime.sendMessage({
+        type: "VIDEO_SYNC",
+        video_time: video.currentTime,
+      }).catch(() => {});
+    });
+
     video.addEventListener("seeking", () => {
       if (activeCard && activeCard.parentNode) {
         activeCard.parentNode.removeChild(activeCard);
         activeCard = null;
       }
+      chrome.runtime.sendMessage({
+        type: "VIDEO_SEEK",
+        video_time: video.currentTime,
+      }).catch(() => {});
     });
   }
 }

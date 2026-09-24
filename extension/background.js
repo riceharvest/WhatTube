@@ -86,4 +86,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     }
   }
+
+  // Forward video sync and seek events from content script to offscreen document
+  if (message.type === 'VIDEO_SYNC' || message.type === 'VIDEO_SEEK') {
+    chrome.runtime.sendMessage({
+      type: 'SEND_CONTROL',
+      data: {
+        type: message.type === 'VIDEO_SEEK' ? 'seek' : 'sync',
+        video_time: message.video_time,
+      },
+    }).catch(() => {});
+  }
 });

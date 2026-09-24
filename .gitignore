@@ -29,6 +29,7 @@ ENV/
 # Large model binaries (use scripts/download_models.sh)
 models/*.onnx
 models/*.bin
+models/ct2_*/
 *.pth
 *.pt
 

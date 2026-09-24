@@ -58,16 +58,20 @@ class WhatTubeServer:
         logger.info(f"[*] Initializing ASR Client -> {config.asr_endpoint}...")
         self.asr_client = ResidentASRClient(endpoint_url=config.asr_endpoint)
 
-        logger.info("[*] Initializing CPU Marian Translator...")
-        self.translator = MarianTranslator(device="cpu")
+        logger.info("[*] Initializing CPU Marian Translator (CTranslate2 INT8)...")
+        self.translator = MarianTranslator(device="cpu", use_ct2=True)
         # Pre-warm default target language model
-        self.translator._load_model("id", config.target_language)
+        self.translator.translate("halo", "id", config.target_language)
 
         self.audit_logger = EventAuditLogger(log_path=config.log_file)
         self.clients: Set[websockets.WebSocketServerProtocol] = set()
         self.running = False
         self.last_stride_time = 0.0
         self.last_audio_rx_time = 0.0
+        self.base_video_time = 0.0
+        self.last_emitted_text = ""
+        self.last_emitted_time = 0.0
+        self.last_emitted_lang = ""
 
     async def broadcast(self, message: dict):
         if not self.clients:
@@ -129,7 +133,7 @@ class WhatTubeServer:
                     asyncio.create_task(self.handle_event_burst(event, 0.0))
 
     async def handle_event_burst(self, event, stage1_latency_ms: float):
-        """Dispatches coalesced burst to GPU Turbo ASR and CPU Translator."""
+        """Dispatches coalesced burst to GPU Turbo ASR with acoustic breath-pause splitting."""
         logger.info(
             f"[!] Event #{event.event_id} TRIGGERED: [{event.start_sec:.2f}s - {event.end_sec:.2f}s] "
             f"({event.duration_sec:.2f}s duration)"
@@ -140,84 +144,133 @@ class WhatTubeServer:
             logger.warning(f"[-] Could not extract audio slice for Event #{event.event_id}")
             return
 
-        # 4. GPU Stage 2: Whisper Large-v3-Turbo
-        loop = asyncio.get_running_loop()
-        t_asr_0 = time.perf_counter()
-        asr_res = await loop.run_in_executor(
-            None, self.asr_client.transcribe, event_audio, self.config.sample_rate
-        )
-        t_asr = (time.perf_counter() - t_asr_0) * 1000.0
+        # Acoustic breath-pause splitting: decouples preceding English from foreign chatter
+        sub_slices = []
+        if event.duration_sec >= 4.0:
+            split_sec = self.vad.find_split_point(event_audio, sample_rate=self.config.sample_rate)
+            if split_sec is not None:
+                split_idx = int(split_sec * self.config.sample_rate)
+                sub_slices.append((event.start_sec, event.start_sec + split_sec, event_audio[:split_idx]))
+                sub_slices.append((event.start_sec + split_sec, event.end_sec, event_audio[split_idx:]))
+        
+        if not sub_slices:
+            sub_slices.append((event.start_sec, event.end_sec, event_audio))
 
+        loop = asyncio.get_running_loop()
         trigger_reason = f"LID min p_en < {self.config.lid_suspicious}"
 
-        # 5. Turbo Language Gate Filter
-        if asr_res.is_discarded or asr_res.language.lower() == "en":
-            logger.info(
-                f"[x] Event #{event.event_id} DISCARDED: {asr_res.discard_reason or 'Classified as English'} "
-                f"(lang={asr_res.language}, text='{asr_res.text}')"
+        for sub_start, sub_end, sub_audio in sub_slices:
+            t_asr_0 = time.perf_counter()
+            asr_res = await loop.run_in_executor(
+                None, self.asr_client.transcribe, sub_audio, self.config.sample_rate
             )
+            t_asr = (time.perf_counter() - t_asr_0) * 1000.0
+
+            # Turbo Language Gate Filter
+            if asr_res.is_discarded or asr_res.language.lower() == "en":
+                logger.info(
+                    f"[x] Sub-Event [{sub_start:.2f}s - {sub_end:.2f}s] DISCARDED: {asr_res.discard_reason or 'Classified as English'} "
+                    f"(lang={asr_res.language}, text='{asr_res.text}')"
+                )
+                self.audit_logger.log_event(
+                    event_id=event.event_id,
+                    start_sec=sub_start,
+                    end_sec=sub_end,
+                    duration_sec=sub_end - sub_start,
+                    trigger_reason=trigger_reason,
+                    asr_lang=asr_res.language,
+                    original_text=asr_res.text,
+                    translated_text="",
+                    is_emitted=False,
+                    discard_reason=asr_res.discard_reason or "Classified as English",
+                    timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
+                )
+                continue
+
+            # Multi-window consensus & deduplication filter
+            clean_curr = asr_res.text.strip().lower()
+            clean_last = self.last_emitted_text.strip().lower()
+            time_diff = abs(sub_start - self.last_emitted_time)
+
+            curr_words = set(clean_curr.replace(".", "").replace(",", "").split())
+            last_words = set(clean_last.replace(".", "").replace(",", "").split())
+            overlap = len(curr_words & last_words) / max(len(curr_words), 1) if last_words else 0.0
+
+            # Skip duplicate or near-duplicate emissions within 3.5s
+            if (clean_curr == clean_last or overlap >= 0.8) and time_diff < 3.5 and len(clean_curr) <= len(clean_last):
+                logger.info(f"[*] Multi-window deduplication: skipping near-duplicate '{asr_res.text}' (overlap={overlap:.2f})")
+                continue
+
+            # Skip if current is already a sub-phrase of recent longer caption
+            if (clean_curr in clean_last or overlap >= 0.6) and len(clean_curr) < len(clean_last) and time_diff < 3.5:
+                logger.info(f"[*] Multi-window deduplication: skipping sub-fragment '{asr_res.text}'")
+                continue
+
+            # Check if this extends a previous caption (e.g. adjacent overlapping window)
+            is_extension = (
+                clean_last != "" and
+                (clean_last in clean_curr or overlap >= 0.4) and
+                len(clean_curr) > len(clean_last) and
+                time_diff < 3.5
+            )
+
+            # Stage 3: CPU Multilingual Translation (CTranslate2 INT8, ~50ms)
+            t_trans_0 = time.perf_counter()
+            trans_res = await loop.run_in_executor(
+                None,
+                self.translator.translate,
+                asr_res.text,
+                asr_res.language,
+                self.config.target_language,
+            )
+            t_trans = (time.perf_counter() - t_trans_0) * 1000.0
+            total_latency_ms = stage1_latency_ms + t_asr + t_trans
+
+            # Calculate video time if synced, else relative time
+            video_start = round(self.base_video_time + sub_start, 2)
+            video_end = round(self.base_video_time + sub_end, 2)
+
+            self.last_emitted_text = asr_res.text
+            self.last_emitted_time = sub_start
+            self.last_emitted_lang = asr_res.language
+
+            action_type = "update" if is_extension else "new"
+            logger.info(
+                f"[+] EMITTING CAPTION [{action_type.upper()}] ({asr_res.language.upper()} -> {self.config.target_language.upper()}): "
+                f"[{video_start}s - {video_end}s] '{trans_res.translated_text}' [orig: '{asr_res.text}'] ({total_latency_ms:.1f}ms total)"
+            )
+
+            caption_payload = {
+                "type": "caption",
+                "action": action_type,
+                "start": video_start,
+                "end": video_end,
+                "language": asr_res.language,
+                "original": asr_res.text,
+                "translation": trans_res.translated_text,
+                "latency_ms": round(total_latency_ms, 1),
+            }
+
+            await self.broadcast(caption_payload)
+
             self.audit_logger.log_event(
                 event_id=event.event_id,
-                start_sec=event.start_sec,
-                end_sec=event.end_sec,
-                duration_sec=event.duration_sec,
+                start_sec=sub_start,
+                end_sec=sub_end,
+                duration_sec=sub_end - sub_start,
                 trigger_reason=trigger_reason,
                 asr_lang=asr_res.language,
                 original_text=asr_res.text,
-                translated_text="",
-                is_emitted=False,
-                discard_reason=asr_res.discard_reason or "Classified as English",
-                timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
+                translated_text=trans_res.translated_text,
+                is_emitted=True,
+                discard_reason="",
+                timings={
+                    "stage1_ms": stage1_latency_ms,
+                    "asr_ms": t_asr,
+                    "trans_ms": t_trans,
+                    "total_ms": total_latency_ms,
+                },
             )
-            return
-
-        # 6. Stage 3: CPU Multilingual Translation
-        t_trans_0 = time.perf_counter()
-        trans_res = await loop.run_in_executor(
-            None,
-            self.translator.translate,
-            asr_res.text,
-            asr_res.language,
-            self.config.target_language,
-        )
-        t_trans = (time.perf_counter() - t_trans_0) * 1000.0
-
-        total_latency_ms = stage1_latency_ms + t_asr + t_trans
-        logger.info(
-            f"[+] EMITTING CAPTION #{event.event_id} ({asr_res.language.upper()} -> {self.config.target_language.upper()}): "
-            f"'{trans_res.translated_text}' [orig: '{asr_res.text}'] ({total_latency_ms:.1f}ms total)"
-        )
-
-        caption_payload = {
-            "type": "caption",
-            "start": event.start_sec,
-            "end": event.end_sec,
-            "language": asr_res.language,
-            "original": asr_res.text,
-            "translation": trans_res.translated_text,
-            "latency_ms": round(total_latency_ms, 1),
-        }
-
-        await self.broadcast(caption_payload)
-
-        self.audit_logger.log_event(
-            event_id=event.event_id,
-            start_sec=event.start_sec,
-            end_sec=event.end_sec,
-            duration_sec=event.duration_sec,
-            trigger_reason=trigger_reason,
-            asr_lang=asr_res.language,
-            original_text=asr_res.text,
-            translated_text=trans_res.translated_text,
-            is_emitted=True,
-            discard_reason="",
-            timings={
-                "stage1_ms": stage1_latency_ms,
-                "asr_ms": t_asr,
-                "trans_ms": t_trans,
-                "total_ms": total_latency_ms,
-            },
-        )
 
     async def handle_client(self, websocket):
         self.clients.add(websocket)
@@ -237,11 +290,21 @@ class WhatTubeServer:
                         msg_type = data.get("type")
                         if msg_type == "ping":
                             await websocket.send(json.dumps({"type": "pong"}))
+                        elif msg_type == "sync":
+                            vtime = float(data.get("video_time", 0.0))
+                            self.base_video_time = vtime - self.buffer.current_time_sec
+                            logger.info(f"[*] Video synced: current_video_time={vtime:.2f}s (offset={self.base_video_time:.2f}s)")
                         elif msg_type == "seek":
-                            logger.info(f"[*] Player seek detected to {data.get('video_time', 0):.2f}s")
+                            vtime = float(data.get("video_time", 0.0))
+                            logger.info(f"[*] Player seek detected to {vtime:.2f}s")
                             self.buffer.reset()
+                            self.aggregator.reset()
+                            self.base_video_time = vtime
+                            self.last_emitted_text = ""
                         elif msg_type == "reset":
                             self.buffer.reset()
+                            self.aggregator.reset()
+                            self.last_emitted_text = ""
                     except json.JSONDecodeError:
                         pass
         except websockets.ConnectionClosed:

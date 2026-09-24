@@ -97,6 +97,11 @@ async def transcribe(request: Request):
     except Exception:
         pass
 
+    # Peak amplitude normalization for quiet background voices
+    max_val = float(np.max(np.abs(audio)))
+    if max_val > 1e-4:
+        audio = (audio / max_val * 0.95).astype(np.float32)
+
     dtype = torch.float16 if device in ["xpu", "cuda"] else torch.float32
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt").input_features.to(device, dtype=dtype)
 
@@ -104,8 +109,7 @@ async def transcribe(request: Request):
         gen_out = model.generate(
             inputs,
             max_new_tokens=64,
-            repetition_penalty=1.15,
-            no_repeat_ngram_size=3,
+            repetition_penalty=1.05,
             return_dict_in_generate=True,
         )
 
@@ -125,12 +129,19 @@ async def transcribe(request: Request):
     is_discarded = False
     discard_reason = ""
 
+    noise_hallucinations = {
+        "", ".", "...", "!", "?", "♪", "[music]",
+        "thank you", "thank you.", "thank you for watching", "thank you for watching.",
+        "please subscribe", "subscribe", "subtitles by"
+    }
+    clean_lower = decoded_text.lower().strip()
+
     if detected_lang.lower() == "en":
         is_discarded = True
         discard_reason = "Turbo ASR classified language as English"
-    elif len(decoded_text) == 0 or decoded_text in [".", "...", "!", "?", "♪", "[music]"]:
+    elif clean_lower in noise_hallucinations or any(clean_lower.startswith(h) for h in ["subtitles by", "translated by", "thank you for watching"]):
         is_discarded = True
-        discard_reason = "Empty or hallucinated punctuation"
+        discard_reason = f"Noise hallucination filter: '{decoded_text}'"
 
     return {
         "language": detected_lang,

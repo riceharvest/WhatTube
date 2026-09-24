@@ -3,7 +3,7 @@
 import numpy as np
 import onnxruntime as ort
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Tuple, Union, Optional
 
 class EnergyAndSileroVAD:
     """Combines sub-millisecond RMS energy filter with Silero VAD v6."""
@@ -57,3 +57,37 @@ class EnergyAndSileroVAD:
         )
         max_prob = float(np.max(probs))
         return (max_prob >= self.vad_threshold), rms, max_prob
+
+    def find_split_point(
+        self,
+        audio: np.ndarray,
+        sample_rate: int = 16000,
+        min_split_sec: float = 1.5,
+        max_split_sec: float = 4.0,
+    ) -> Optional[float]:
+        """Find natural acoustic breath pause dip (p < 0.30) to split mixed or multi-utterance bursts."""
+        window_size = 576
+        num_windows = len(audio) // window_size
+        if num_windows < int(min_split_sec * sample_rate / window_size):
+            return None
+
+        chunks = audio[: num_windows * window_size].reshape(num_windows, window_size)
+        self.reset_states()
+        probs, _, _ = self.session.run(
+            ["speech_probs", "hn", "cn"],
+            {"input": chunks, "h": self._h, "c": self._c},
+        )
+
+        start_idx = int(min_split_sec * sample_rate / window_size)
+        end_idx = min(int(max_split_sec * sample_rate / window_size), num_windows - 5)
+
+        best_idx = None
+        min_prob = 1.0
+        for i in range(start_idx, end_idx):
+            if probs[i] < 0.30 and probs[i] < min_prob:
+                min_prob = probs[i]
+                best_idx = i
+
+        if best_idx is not None:
+            return float(best_idx * window_size / sample_rate)
+        return None
