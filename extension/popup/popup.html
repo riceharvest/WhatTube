@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">W</div>
+      <div class="logo-text">WhatTube</div>
+    </div>
+    <div id="statusBadge" class="status-badge idle">Idle</div>
+  </div>
+
+  <div class="content">
+    <p class="desc">Real-time foreign background chatter detection & subtitle overlay.</p>
+
+    <button id="toggleBtn" class="btn primary">Start Listening</button>
+
+    <div class="settings">
+      <div class="setting-item">
+        <label for="targetLang">Translate To:</label>
+        <select id="targetLang">
+          <option value="en" selected>English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="ja">Japanese</option>
+        </select>
+      </div>
+
+      <div class="setting-item">
+        <label for="serverStatus">Local Server:</label>
+        <span id="serverStatus" class="server-indicator">ws://localhost:8765</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

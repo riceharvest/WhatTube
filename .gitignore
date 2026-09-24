@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtualenv
+.venv/
+env/
+venv/
+ENV/
+
+# Large model binaries (use scripts/download_models.sh)
+models/*.onnx
+models/*.bin
+*.pth
+*.pt
+
+# Scratch & Logs
+*.log
+scratch/
+logs/
+events.jsonl
+*.wav
+
+# IDE
+.vscode/
+.idea/
+*.swp
