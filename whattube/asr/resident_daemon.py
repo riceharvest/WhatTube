@@ -168,6 +168,8 @@ async def transcribe(request: Request):
             "please subscribe", "subscribe", "subtitles by"
         }
         clean_lower = decoded_text.lower().strip()
+        stripped_word = clean_lower.strip("[]().,!?:;-\"'/~")
+        acoustic_descriptions = {"music", "musik", "musica", "musique", "applause", "cheering", "laughter", "chatter", "silence"}
 
         if detected_lang.lower() == "en":
             is_discarded = True
@@ -175,7 +177,11 @@ async def transcribe(request: Request):
         elif language_prob < 0.15:
             is_discarded = True
             discard_reason = f"Low language confidence ({language_prob:.2f} < 0.15) in background noise"
-        elif clean_lower in noise_hallucinations or any(clean_lower.startswith(h) for h in ["subtitles by", "translated by", "thank you for watching"]):
+        elif (
+            clean_lower in noise_hallucinations
+            or stripped_word in acoustic_descriptions
+            or any(clean_lower.startswith(h) for h in ["subtitles by", "translated by", "thank you for watching"])
+        ):
             is_discarded = True
             discard_reason = f"Noise hallucination filter: '{decoded_text}'"
         elif len(clean_lower) <= 2 or clean_lower.isdigit():
