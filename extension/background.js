@@ -45,13 +45,25 @@ async function startCapture(tabId, targetLang = 'en') {
       targetTabId: tabId,
     });
 
-    await setSessionState({ isRecording: true, activeTabId: tabId, targetLang });
+    if (!streamId) {
+      throw new Error('Failed to acquire tab audio stream ID');
+    }
+
+    // Retrieve auth token from storage if configured
+    let authToken = '';
+    if (chrome.storage && chrome.storage.sync) {
+      const stored = await chrome.storage.sync.get(['authToken']);
+      authToken = stored.authToken || '';
+    }
+
+    await setSessionState({ isRecording: true, activeTabId: tabId, targetLang, lastError: null });
 
     chrome.runtime.sendMessage({
       type: 'START_CAPTURE',
       streamId: streamId,
       tabId: tabId,
       targetLang: targetLang,
+      authToken: authToken,
     });
 
     // Notify content script that capture is active so it sends immediate video sync
@@ -60,9 +72,11 @@ async function startCapture(tabId, targetLang = 'en') {
     }, 300);
 
     console.log(`[WhatTube] Started capture on tab ${tabId} (targetLang: ${targetLang})`);
+    return { ok: true };
   } catch (err) {
     console.error('[WhatTube] Failed to start capture:', err);
-    await setSessionState({ isRecording: false, activeTabId: null });
+    await setSessionState({ isRecording: false, activeTabId: null, lastError: err.message });
+    return { ok: false, error: err.message || 'Capture initialization failed' };
   }
 }
 
@@ -93,17 +107,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'TOGGLE_CAPTURE') {
-    getSessionState().then((state) => {
+    getSessionState().then(async (state) => {
       if (state.isRecording) {
-        stopCapture().then(() => sendResponse({ isRecording: false }));
+        await stopCapture();
+        sendResponse({ isRecording: false, status: 'idle' });
       } else {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-          if (tabs[0] && tabs[0].id) {
-            startCapture(tabs[0].id, message.targetLang || state.targetLang).then(() =>
-              sendResponse({ isRecording: true })
-            );
+        chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+          if (!tabs[0] || !tabs[0].id) {
+            sendResponse({ isRecording: false, status: 'error', error: 'No active tab found' });
+            return;
+          }
+          const tab = tabs[0];
+          if (tab.url && (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url.startsWith('edge://') || tab.url.startsWith('about:'))) {
+            sendResponse({ isRecording: false, status: 'error', error: 'Cannot capture audio on system or extension tabs' });
+            return;
+          }
+          const result = await startCapture(tab.id, message.targetLang || state.targetLang);
+          if (result.ok) {
+            sendResponse({ isRecording: true, status: 'listening' });
           } else {
-            sendResponse({ isRecording: false, error: 'No active tab' });
+            sendResponse({ isRecording: false, status: 'error', error: result.error });
           }
         });
       }

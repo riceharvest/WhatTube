@@ -36,12 +36,12 @@ def test_session_state_isolation():
     # Tab 1 changes epoch via seek
     s1.increment_epoch(new_video_time=120.0)
     assert s1.epoch == 1
-    assert s1.base_video_time == 120.0
+    assert s1.anchor_video_time == 120.0
     assert s1.ring_buffer.current_time_sec == 0.0
 
     # Tab 2's epoch and state must remain untouched
     assert s2.epoch == 0
-    assert s2.base_video_time == 0.0
+    assert s2.anchor_video_time == 0.0
     assert s2.target_lang == "es"
 
 @pytest.mark.asyncio

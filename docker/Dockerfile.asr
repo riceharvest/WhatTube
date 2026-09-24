@@ -1,0 +1,28 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md /app/
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir "torch>=2.1.0" && \
+    pip install --no-cache-dir -e .
+
+COPY whattube/ /app/whattube/
+
+ENV WHATTUBE_ASR_HOST="0.0.0.0"
+ENV WHATTUBE_ASR_PORT="8766"
+
+EXPOSE 8766
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=5 \
+    CMD curl -f http://127.0.0.1:8766/health || exit 1
+
+ENTRYPOINT ["python3", "-m", "whattube.asr.resident_daemon"]
+CMD ["--host", "0.0.0.0", "--port", "8766"]

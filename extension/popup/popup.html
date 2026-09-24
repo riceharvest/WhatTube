@@ -18,6 +18,8 @@
 
     <button id="toggleBtn" class="btn primary">Start Listening</button>
 
+    <div id="errorContainer" class="error-banner" style="display: none;"></div>
+
     <div class="settings">
       <div class="setting-item">
         <label for="targetLang">Translate To:</label>
@@ -28,6 +30,11 @@
           <option value="de">German</option>
           <option value="ja">Japanese</option>
         </select>
+      </div>
+
+      <div class="setting-item">
+        <label for="authToken">Auth Token:</label>
+        <input type="password" id="authToken" placeholder="Token from server..." class="text-input" />
       </div>
 
       <div class="setting-item">

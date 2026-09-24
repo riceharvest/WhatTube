@@ -62,13 +62,18 @@ class EnergyAndSileroVAD:
         self,
         audio: np.ndarray,
         sample_rate: int = 16000,
-        min_split_sec: float = 1.5,
-        max_split_sec: float = 4.0,
+        min_subslice_sec: float = 2.5,
     ) -> Optional[float]:
-        """Find natural acoustic breath pause dip (p < 0.30) to split mixed or multi-utterance bursts."""
+        """Find natural acoustic breath pause dip (sustained valley >= 144ms, avg p < 0.25).
+        Enforces that both resulting sub-slices are at least min_subslice_sec long.
+        """
         window_size = 576
         num_windows = len(audio) // window_size
-        if num_windows < int(min_split_sec * sample_rate / window_size):
+        min_sub_windows = int(min_subslice_sec * sample_rate / window_size)
+
+        start_idx = min_sub_windows
+        end_idx = num_windows - min_sub_windows
+        if end_idx <= start_idx:
             return None
 
         chunks = audio[: num_windows * window_size].reshape(num_windows, window_size)
@@ -78,15 +83,16 @@ class EnergyAndSileroVAD:
             {"input": chunks, "h": self._h, "c": self._c},
         )
 
-        start_idx = int(min_split_sec * sample_rate / window_size)
-        end_idx = min(int(max_split_sec * sample_rate / window_size), num_windows - 5)
-
+        # Look for a sustained valley of low speech probability (4 consecutive windows ~144ms)
+        valley_len = 4
         best_idx = None
-        min_prob = 1.0
-        for i in range(start_idx, end_idx):
-            if probs[i] < 0.30 and probs[i] < min_prob:
-                min_prob = probs[i]
-                best_idx = i
+        min_avg_prob = 0.25
+
+        for i in range(start_idx, end_idx - valley_len):
+            avg_prob = float(np.mean(probs[i : i + valley_len]))
+            if avg_prob < min_avg_prob:
+                min_avg_prob = avg_prob
+                best_idx = i + valley_len // 2
 
         if best_idx is not None:
             return float(best_idx * window_size / sample_rate)

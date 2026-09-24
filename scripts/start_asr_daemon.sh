@@ -4,6 +4,36 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${WHATTUBE_ASR_PORT:-8766}"
 HOST="${WHATTUBE_ASR_HOST:-127.0.0.1}"
+MODE="${WHATTUBE_MODE:-auto}" # auto, native, docker
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --native)
+      MODE="native"
+      shift
+      ;;
+    --docker)
+      MODE="docker"
+      shift
+      ;;
+    --host)
+      HOST="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--native | --docker] [--host HOST] [--port PORT]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1"
+      exit 1
+      ;;
+  esac
+done
 
 # Check if daemon is already running
 if curl -s "http://${HOST}:${PORT}/health" 2>/dev/null | grep -q "ready"; then
@@ -11,8 +41,13 @@ if curl -s "http://${HOST}:${PORT}/health" 2>/dev/null | grep -q "ready"; then
   exit 0
 fi
 
+USE_DOCKER=0
+if [ "$MODE" = "docker" ] || { [ "$MODE" = "auto" ] && [ "${WHATTUBE_USE_DOCKER:-0}" = "1" ]; }; then
+  USE_DOCKER=1
+fi
+
 # Mode 1: Native Python execution (Preferred for macOS MPS, local CUDA, local XPU, CPU)
-if [ "${WHATTUBE_USE_DOCKER:-0}" != "1" ] && [ -f "$DIR/.venv/bin/python" ]; then
+if [ "$USE_DOCKER" -eq 0 ] && [ -f "$DIR/.venv/bin/python" ]; then
   echo "[*] Launching resident Whisper daemon natively via Python (.venv)..."
   PYTHONPATH="$DIR" "$DIR/.venv/bin/python" -m whattube.asr.resident_daemon --host "$HOST" --port "$PORT" &
   DAEMON_PID=$!
@@ -30,9 +65,14 @@ if [ "${WHATTUBE_USE_DOCKER:-0}" != "1" ] && [ -f "$DIR/.venv/bin/python" ]; the
   exit 1
 fi
 
-# Mode 2: Docker Container fallback
+# Mode 2: Docker Container execution
 CONTAINER_NAME="whattube-asr-daemon"
-IMAGE="${WHATTUBE_DOCKER_IMAGE:-f01e24f6c7ff}"
+IMAGE="${WHATTUBE_DOCKER_IMAGE:-whattube-asr:latest}"
+
+if ! docker image inspect "$IMAGE" &>/dev/null; then
+  echo "[*] Docker image '$IMAGE' not found locally. Building from docker/Dockerfile.asr..."
+  docker build -f "$DIR/docker/Dockerfile.asr" -t "$IMAGE" "$DIR"
+fi
 
 echo "[*] Launching resident Whisper daemon in Docker container '$CONTAINER_NAME'..."
 docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
@@ -41,7 +81,6 @@ DOCKER_ARGS=(
   -d
   --name "$CONTAINER_NAME"
   -v "${HOME}/.cache/huggingface:/root/.cache/huggingface"
-  -v "$DIR:/app"
   -p "${HOST}:${PORT}:${PORT}"
 )
 
@@ -53,9 +92,7 @@ elif command -v nvidia-smi &>/dev/null; then
   DOCKER_ARGS+=(--gpus all)
 fi
 
-docker run "${DOCKER_ARGS[@]}" \
-  --entrypoint python3 \
-  "$IMAGE" /app/whattube/asr/resident_daemon.py --host 0.0.0.0 --port "$PORT"
+docker run "${DOCKER_ARGS[@]}" "$IMAGE" --host 0.0.0.0 --port "$PORT"
 
 echo "[*] Waiting for containerized ASR daemon to warm up..."
 for i in {1..30}; do

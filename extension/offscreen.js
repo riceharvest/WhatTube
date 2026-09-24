@@ -8,6 +8,8 @@ let websocket = null;
 let isStreaming = false;
 let currentTargetLang = "en";
 let currentVideoTime = 0.0;
+let currentPlaybackRate = 1.0;
+let currentAuthToken = "";
 
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -20,6 +22,7 @@ const MAX_BUFFERED_AMOUNT = 64 * 1024; // 64 KB backpressure threshold
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "START_CAPTURE") {
     currentTargetLang = message.targetLang || "en";
+    currentAuthToken = message.authToken || "";
     startAudioProcessing(message.streamId);
   } else if (message.type === "STOP_CAPTURE") {
     stopAudioProcessing();
@@ -30,6 +33,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.data.video_time !== undefined) {
         currentVideoTime = message.data.video_time;
+      }
+      if (message.data.playback_rate !== undefined) {
+        currentPlaybackRate = message.data.playback_rate;
       }
       sendControlMessage(message.data);
     }
@@ -63,11 +69,13 @@ function connectWebSocket() {
         reconnectTimer = null;
       }
 
-      // Handshake with server session
+      // Handshake with server session, passing auth token and playback rate
       sendControlMessage({
         type: "init",
+        token: currentAuthToken,
         target_lang: currentTargetLang,
         video_time: currentVideoTime,
+        playback_rate: currentPlaybackRate,
       });
     };
 
@@ -78,6 +86,12 @@ function connectWebSocket() {
           chrome.runtime.sendMessage({
             type: "RELAY_CAPTION",
             payload: data,
+          });
+        } else if (data.type === "error") {
+          console.error("[WhatTube Offscreen] Server error:", data.error);
+          chrome.runtime.sendMessage({
+            type: "CAPTURE_ERROR",
+            error: data.error,
           });
         }
       } catch (e) {

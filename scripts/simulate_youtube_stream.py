@@ -2,16 +2,20 @@
 
 import asyncio
 import json
+import os
 import time
 import argparse
+from pathlib import Path
+from typing import Optional
 import numpy as np
 import soundfile as sf
 import websockets
 
-async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://127.0.0.1:8765"):
+async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://127.0.0.1:8765", token: Optional[str] = None, playback_rate: float = 1.0):
     print(f"\n=== SIMULATING YOUTUBE AUDIO PLAYBACK ===")
     print(f"Audio file: {wav_path}")
     print(f"Slice: {start_sec:.2f}s -> {start_sec + duration_sec:.2f}s ({duration_sec:.2f}s)")
+    print(f"Playback Rate: {playback_rate}x")
     print(f"Target WebSocket: {ws_url}\n")
 
     audio_full, sr = sf.read(wav_path, dtype="float32")
@@ -26,8 +30,15 @@ async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, 
 
     async with websockets.connect(ws_url) as ws:
         print("[+] Connected to WhatTube WebSocket server!")
-        # Send session initialization handshake
-        await ws.send(json.dumps({"type": "init", "video_time": start_sec, "target_lang": "en"}))
+        # Send session initialization handshake with auth token & playback rate
+        init_payload = {
+            "type": "init",
+            "token": token,
+            "video_time": start_sec,
+            "playback_rate": playback_rate,
+            "target_lang": "en",
+        }
+        await ws.send(json.dumps(init_payload))
 
         async def listen_for_captions():
             try:
@@ -70,14 +81,21 @@ async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, 
     return captions_received
 
 def main():
+    token_file = Path.home() / ".whattube" / "token"
+    default_token = os.getenv("WHATTUBE_AUTH_TOKEN", "")
+    if not default_token and token_file.exists():
+        default_token = token_file.read_text().strip()
+
     parser = argparse.ArgumentParser(description="WhatTube Live Stream Simulator")
     parser.add_argument("--wav", default="/mnt/ssd/hermes/cache/scratch/seal-test-P13/P13mMiIL_2I_full_16k.wav")
     parser.add_argument("--start", type=float, default=820.0, help="Start offset in seconds (13:40 = 820s)")
     parser.add_argument("--duration", type=float, default=25.0, help="Duration to stream in seconds")
     parser.add_argument("--ws", default="ws://localhost:8765")
+    parser.add_argument("--token", default=default_token, help="Authentication token")
+    parser.add_argument("--rate", type=float, default=1.0, help="Video playback rate (e.g. 1.0, 1.5, 2.0)")
     args = parser.parse_args()
 
-    asyncio.run(simulate_stream(args.wav, args.start, args.duration, args.ws))
+    asyncio.run(simulate_stream(args.wav, args.start, args.duration, args.ws, args.token, args.rate))
 
 if __name__ == "__main__":
     main()

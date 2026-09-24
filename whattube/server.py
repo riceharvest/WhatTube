@@ -30,6 +30,8 @@ class SessionState:
         websocket: websockets.WebSocketServerProtocol,
         config: Config,
         target_lang: str = "en",
+        initial_video_time: float = 0.0,
+        initial_playback_rate: float = 1.0,
     ):
         self.session_id = session_id
         self.websocket = websocket
@@ -61,11 +63,16 @@ class SessionState:
             max_event_sec=config.max_event_sec,
             lid_suspicious=config.lid_suspicious,
             lid_immediate=config.lid_immediate,
+            lid_english_safe=config.lid_english_safe,
+            consecutive_suspicious_req=config.consecutive_suspicious_req,
         )
 
-        self.base_video_time = 0.0
-        self.last_video_time = 0.0
-        self.playback_rate = 1.0
+        # Timeline anchor mapping:
+        # video_time = anchor_video_time + (audio_time - anchor_audio_time) * playback_rate
+        self.anchor_audio_time = 0.0
+        self.anchor_video_time = initial_video_time
+        self.playback_rate = max(0.1, initial_playback_rate)
+
         self.last_stride_time = 0.0
         self.last_emitted_text = ""
         self.last_emitted_time = 0.0
@@ -73,16 +80,29 @@ class SessionState:
         self.is_closed = False
         self.active_tasks: Set[asyncio.Task] = set()
 
-    def increment_epoch(self, new_video_time: Optional[float] = None):
-        """Invalidates all in-flight ASR/translation tasks and resets temporal aggregator."""
+    def set_anchor(self, audio_time: float, video_time: float, playback_rate: Optional[float] = None):
+        """Re-anchors the audio-to-video timeline mapping."""
+        self.anchor_audio_time = audio_time
+        self.anchor_video_time = video_time
+        if playback_rate is not None and playback_rate > 0.0:
+            self.playback_rate = playback_rate
+
+    def audio_to_video_time(self, audio_sec: float) -> float:
+        """Converts audio buffer timestamp to exact video player timeline position."""
+        return self.anchor_video_time + (audio_sec - self.anchor_audio_time) * self.playback_rate
+
+    def increment_epoch(self, new_video_time: Optional[float] = None, playback_rate: Optional[float] = None):
+        """Invalidates all in-flight ASR/translation tasks, resets temporal buffer and re-anchors."""
         self.epoch += 1
         self.ring_buffer.reset()
         self.aggregator.reset()
         self.last_stride_time = 0.0
         self.last_emitted_text = ""
-        if new_video_time is not None:
-            self.base_video_time = new_video_time
-            self.last_video_time = new_video_time
+
+        # Re-anchor to new video position with audio_time = 0.0
+        rate = playback_rate if (playback_rate is not None and playback_rate > 0.0) else self.playback_rate
+        vtime = new_video_time if new_video_time is not None else self.anchor_video_time
+        self.set_anchor(audio_time=0.0, video_time=vtime, playback_rate=rate)
 
         # Cancel all pending burst tasks belonging to older epoch
         for task in list(self.active_tasks):
@@ -175,7 +195,7 @@ class WhatTubeServer:
 
         # Acoustic breath-pause splitting: decouples preceding English from foreign chatter
         sub_slices = []
-        if event.duration_sec >= 3.5:
+        if event.duration_sec >= 5.0:
             split_sec = session.vad.find_split_point(event_audio, sample_rate=self.config.sample_rate)
             if split_sec is not None:
                 split_idx = int(split_sec * self.config.sample_rate)
@@ -269,8 +289,8 @@ class WhatTubeServer:
             if session.epoch != event_epoch or session.is_closed:
                 return
 
-            video_start = round(session.base_video_time + sub_start, 2)
-            video_end = round(session.base_video_time + sub_end, 2)
+            video_start = round(session.audio_to_video_time(sub_start), 2)
+            video_end = round(session.audio_to_video_time(sub_end), 2)
 
             session.last_emitted_text = asr_res.text
             session.last_emitted_time = sub_start
@@ -336,59 +356,121 @@ class WhatTubeServer:
                         task.add_done_callback(session.active_tasks.discard)
 
     async def handle_client(self, websocket):
-        session_id = str(uuid.uuid4())
-        session = SessionState(
-            session_id=session_id,
-            websocket=websocket,
-            config=self.config,
-            target_lang=self.config.target_language,
-        )
-        self.sessions[session_id] = session
-        self.ws_to_session[websocket] = session_id
-        logger.info(f"[+] Client connected: session={session_id[:8]} (Total active sessions: {len(self.sessions)})")
+        # 1. Origin header security check
+        origin = None
+        if hasattr(websocket, "request") and websocket.request:
+            origin = websocket.request.headers.get("origin")
+        elif hasattr(websocket, "request_headers"):
+            origin = websocket.request_headers.get("origin")
+
+        if origin:
+            origin_lower = origin.lower()
+            allowed_prefixes = (
+                "chrome-extension://",
+                "moz-extension://",
+                "http://localhost",
+                "http://127.0.0.1",
+                "https://localhost",
+                "https://127.0.0.1",
+            )
+            if origin_lower != "null" and not any(origin_lower.startswith(p) for p in allowed_prefixes):
+                logger.warning(f"[-] Rejected connection from untrusted origin: {origin}")
+                await websocket.close(code=4403, reason="Forbidden origin")
+                return
+
+        session: Optional[SessionState] = None
+        session_id: Optional[str] = None
 
         try:
+            # 2. STRICT AUTH & INIT PHASE: Only an 'init' message with valid auth token is accepted
+            try:
+                first_msg = await asyncio.wait_for(websocket.recv(), timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning("[-] Client timed out waiting for init handshake")
+                await websocket.close(code=4408, reason="Handshake timeout")
+                return
+
+            if isinstance(first_msg, bytes):
+                logger.warning("[-] Client sent binary PCM before init/auth handshake")
+                await websocket.close(code=4403, reason="Binary data before init")
+                return
+
+            try:
+                init_data = json.loads(first_msg)
+            except Exception:
+                await websocket.close(code=4400, reason="Invalid JSON handshake")
+                return
+
+            if init_data.get("type") != "init":
+                logger.warning(f"[-] First message was '{init_data.get('type')}', expected 'init'")
+                await websocket.close(code=4400, reason="First message must be init")
+                return
+
+            # Validate auth token
+            token = init_data.get("token")
+            if self.config.auth_token:
+                if not token or token != self.config.auth_token:
+                    logger.warning("[-] Client failed auth token verification")
+                    await websocket.send(json.dumps({"type": "error", "error": "Unauthorized"}))
+                    await websocket.close(code=4401, reason="Unauthorized")
+                    return
+
+            # 3. Authenticated: Construct SessionState now (expensive VAD/LID only created once auth passes)
+            session_id = str(uuid.uuid4())
+            client_target = init_data.get("target_lang", self.config.target_language)
+            vtime = float(init_data.get("video_time", 0.0))
+            prate = float(init_data.get("playback_rate", 1.0))
+
+            session = SessionState(
+                session_id=session_id,
+                websocket=websocket,
+                config=self.config,
+                target_lang=client_target.lower() if client_target else "en",
+                initial_video_time=vtime,
+                initial_playback_rate=prate,
+            )
+            self.sessions[session_id] = session
+            self.ws_to_session[websocket] = session_id
+            logger.info(
+                f"[+] Client authenticated & connected: session={session_id[:8]} "
+                f"(target_lang={session.target_lang}, video_time={vtime:.2f}s, rate={session.playback_rate}x, "
+                f"total active: {len(self.sessions)})"
+            )
+            await websocket.send(json.dumps({"type": "ready", "session_id": session_id}))
+
+            # 4. Main message loop
             async for message in websocket:
                 if isinstance(message, bytes):
-                    # PCM Float32 chunk for this specific session
+                    if len(message) > 1024 * 1024:  # 1MB max chunk limit
+                        logger.warning(f"[-] Dropping oversized PCM chunk ({len(message)} bytes)")
+                        continue
                     pcm_chunk = np.frombuffer(message, dtype=np.float32)
                     session.ring_buffer.append(pcm_chunk)
                     session.last_audio_rx_time = time.time()
                     await self.process_sliding_window(session)
                 else:
-                    # JSON control message
                     try:
                         data = json.loads(message)
                         msg_type = data.get("type")
 
-                        if msg_type == "init":
-                            # Session handshake
-                            token = data.get("token")
-                            if self.config.auth_token and token != self.config.auth_token:
-                                await websocket.send(json.dumps({"type": "error", "error": "Unauthorized"}))
-                                await websocket.close(code=4401, reason="Unauthorized")
-                                return
-
-                            client_target = data.get("target_lang")
-                            if client_target:
-                                session.target_lang = client_target.lower()
+                        if msg_type == "sync":
                             vtime = float(data.get("video_time", 0.0))
-                            session.base_video_time = vtime
-                            session.last_video_time = vtime
-                            session.playback_rate = float(data.get("playback_rate", 1.0))
-                            logger.info(f"[*] Session {session_id[:8]} initialized: target_lang={session.target_lang}, video_time={vtime:.2f}s")
-                            await websocket.send(json.dumps({"type": "ready", "session_id": session_id}))
-
-                        elif msg_type == "sync":
-                            vtime = float(data.get("video_time", 0.0))
-                            session.base_video_time = vtime - session.ring_buffer.current_time_sec
-                            session.last_video_time = vtime
-                            session.playback_rate = float(data.get("playback_rate", session.playback_rate))
+                            prate = float(data.get("playback_rate", session.playback_rate))
+                            cur_audio = session.ring_buffer.current_time_sec
+                            session.set_anchor(audio_time=cur_audio, video_time=vtime, playback_rate=prate)
 
                         elif msg_type == "seek":
                             vtime = float(data.get("video_time", 0.0))
+                            prate = float(data.get("playback_rate", session.playback_rate))
                             logger.info(f"[*] [Session {session_id[:8]}] Seek to {vtime:.2f}s (new epoch {session.epoch + 1})")
-                            session.increment_epoch(new_video_time=vtime)
+                            session.increment_epoch(new_video_time=vtime, playback_rate=prate)
+
+                        elif msg_type == "ratechange":
+                            vtime = float(data.get("video_time", session.anchor_video_time))
+                            prate = float(data.get("playback_rate", 1.0))
+                            cur_audio = session.ring_buffer.current_time_sec
+                            session.set_anchor(audio_time=cur_audio, video_time=vtime, playback_rate=prate)
+                            logger.info(f"[*] [Session {session_id[:8]}] Playback rate changed to {prate}x at video_time={vtime:.2f}s")
 
                         elif msg_type == "set_target_lang":
                             new_lang = data.get("target_lang", "en").lower()
@@ -406,15 +488,17 @@ class WhatTubeServer:
         except websockets.ConnectionClosed:
             pass
         finally:
-            session.is_closed = True
-            session.increment_epoch()
-            self.sessions.pop(session_id, None)
-            self.ws_to_session.pop(websocket, None)
-            logger.info(f"[-] Session {session_id[:8]} disconnected (Remaining sessions: {len(self.sessions)})")
+            if session:
+                session.is_closed = True
+                session.increment_epoch()
+                self.sessions.pop(session_id, None)
+                self.ws_to_session.pop(websocket, None)
+                logger.info(f"[-] Session {session_id[:8]} disconnected (Remaining sessions: {len(self.sessions)})")
 
     async def start(self):
         self.running = True
         logger.info(f"[+] Starting WhatTube WebSocket Server on {self.config.ws_host}:{self.config.ws_port}")
+        logger.info(f"[*] Auth Token required: {self.config.auth_token} (saved to ~/.whattube/token)")
         ticker_task = asyncio.create_task(self.background_tick())
         try:
             async with websockets.serve(

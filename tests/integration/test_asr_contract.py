@@ -78,3 +78,30 @@ def test_asr_rejects_malformed_input():
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req)
     assert exc_info.value.code == 400
+
+from pathlib import Path
+FIXTURE_WAV = Path("/mnt/ssd/hermes/cache/scratch/seal-test-P13/P13mMiIL_2I_full_16k.wav")
+
+@pytest.mark.skipif(not is_daemon_running(), reason="ASR daemon not running")
+@pytest.mark.skipif(not FIXTURE_WAV.exists(), reason="Fixture audio not found")
+def test_asr_real_speech_language_prob():
+    # 831.0s to 834.0s is known Indonesian street vendor speech
+    audio, sr = sf.read(str(FIXTURE_WAV), start=int(831.0 * 16000), stop=int(834.0 * 16000), dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+
+    bio = io.BytesIO()
+    sf.write(bio, audio, 16000, format="WAV")
+    wav_bytes = bio.getvalue()
+
+    req = urllib.request.Request(
+        f"{DAEMON_URL}/transcribe",
+        data=wav_bytes,
+        headers={"Content-Type": "application/octet-stream"},
+    )
+    with urllib.request.urlopen(req) as resp:
+        res = json.loads(resp.read().decode())
+        assert res["language"] == "id"
+        assert 0.0 < res["language_prob"] < 1.0
+        assert not res["is_discarded"]
+

@@ -27,13 +27,15 @@ class DynamicEventAggregator:
 
     def __init__(
         self,
-        pre_roll_sec: float = 0.8,
+        pre_roll_sec: float = 0.5,
         post_roll_sec: float = 0.5,
         close_hangover_sec: float = 0.8,
-        min_event_sec: float = 2.5,
-        max_event_sec: float = 6.5,
+        min_event_sec: float = 3.0,
+        max_event_sec: float = 8.0,
         lid_suspicious: float = 0.55,
         lid_immediate: float = 0.20,
+        lid_english_safe: float = 0.75,
+        consecutive_suspicious_req: int = 2,
     ):
         self.pre_roll_sec = pre_roll_sec
         self.post_roll_sec = post_roll_sec
@@ -42,8 +44,10 @@ class DynamicEventAggregator:
         self.max_event_sec = max_event_sec
         self.lid_suspicious = lid_suspicious
         self.lid_immediate = lid_immediate
+        self.lid_english_safe = lid_english_safe
+        self.consecutive_suspicious_req = consecutive_suspicious_req
 
-        self.history: deque = deque(maxlen=3)
+        self.history: deque = deque(maxlen=max(3, consecutive_suspicious_req))
         self.is_active = False
         self.event_id_counter = 0
 
@@ -82,7 +86,7 @@ class DynamicEventAggregator:
                 if w["is_speech"] and w["lid"] and (w["lid"]["p_en"] < self.lid_suspicious)
             ]
 
-            if is_immediate or len(suspicious_windows) >= 2:
+            if is_immediate or len(suspicious_windows) >= self.consecutive_suspicious_req:
                 # Open Event
                 self.is_active = True
                 self.event_id_counter += 1
@@ -97,7 +101,9 @@ class DynamicEventAggregator:
             return None
 
         # When ACTIVE:
-        if is_suspicious or is_immediate:
+        # If confident English (p_en >= lid_english_safe), treat as non-suspicious to prevent event extension
+        is_clean_english = is_speech and (p_en >= self.lid_english_safe)
+        if (is_suspicious or is_immediate) and not is_clean_english:
             self.event_last_active_time = t_end
             self.cur_trigger_windows.append(window_info)
 
