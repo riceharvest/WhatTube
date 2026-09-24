@@ -155,6 +155,7 @@ class DynamicEventAggregator:
             closed_at=time.time(),
         )
 
+        self.history.clear()
         self.is_active = False
         self.cur_event_id = None
         self.cur_trigger_windows = []
