@@ -140,6 +140,7 @@ function sendVideoSync(isSeek = false) {
     type: isSeek ? "VIDEO_SEEK" : "VIDEO_SYNC",
     video_time: video.currentTime,
     playback_rate: video.playbackRate || 1.0,
+    video_title: document.title || "",
   }).catch(() => {});
 }
 

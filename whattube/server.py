@@ -21,6 +21,38 @@ from whattube.logger import EventAuditLogger
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("WhatTube")
 
+TITLE_KEYWORD_LANG_MAP = {
+    "japan": "ja", "japanese": "ja", "tokyo": "ja", "osaka": "ja", "kyoto": "ja", "ramen": "ja", "sushi": "ja",
+    "indonesia": "id", "indonesian": "id", "jakarta": "id", "bali": "id",
+    "bangladesh": "bn", "bengali": "bn", "dhaka": "bn", "bangla": "bn",
+    "thailand": "th", "thai": "th", "bangkok": "th", "phuket": "th",
+    "korea": "ko", "korean": "ko", "seoul": "ko",
+    "china": "zh", "chinese": "zh", "taiwan": "zh", "beijing": "zh", "shanghai": "zh",
+    "france": "fr", "french": "fr", "paris": "fr",
+    "spain": "es", "spanish": "es", "mexico": "es", "colombia": "es", "madrid": "es", "barcelona": "es",
+    "italy": "it", "italian": "it", "rome": "it", "milan": "it", "naples": "it",
+    "germany": "de", "german": "de", "berlin": "de", "munich": "de",
+    "vietnam": "vi", "vietnamese": "vi", "hanoi": "vi", "saigon": "vi",
+    "india": "hi", "hindi": "hi", "mumbai": "hi", "delhi": "hi",
+    "arab": "ar", "arabic": "ar", "egypt": "ar", "cairo": "ar", "dubai": "ar", "morocco": "ar",
+    "russia": "ru", "russian": "ru", "moscow": "ru",
+    "poland": "pl", "polish": "pl", "warsaw": "pl",
+    "turkey": "tr", "turkish": "tr", "istanbul": "tr",
+}
+
+def extract_language_hints_from_title(title: str) -> Set[str]:
+    hints = set()
+    if not title:
+        return hints
+    clean = title.lower()
+    for ch in [",", ".", "!", "?", "-", "_", "/", "|", "[", "]", "(", ")", ":", "#"]:
+        clean = clean.replace(ch, " ")
+    tokens = set(clean.split())
+    for kw, lang in TITLE_KEYWORD_LANG_MAP.items():
+        if kw in tokens or (len(kw) >= 5 and kw in clean):
+            hints.add(lang)
+    return hints
+
 class SessionState:
     """Isolated state machine per connected browser tab."""
 
@@ -32,6 +64,7 @@ class SessionState:
         target_lang: str = "en",
         initial_video_time: float = 0.0,
         initial_playback_rate: float = 1.0,
+        video_title: str = "",
     ):
         self.session_id = session_id
         self.websocket = websocket
@@ -73,12 +106,21 @@ class SessionState:
         self.anchor_video_time = initial_video_time
         self.playback_rate = max(0.1, initial_playback_rate)
 
+        self.video_title = video_title
+        self.title_hints = extract_language_hints_from_title(video_title)
         self.last_stride_time = 0.0
         self.last_emitted_text = ""
         self.last_emitted_time = 0.0
         self.last_emitted_lang = ""
         self.is_closed = False
         self.active_tasks: Set[asyncio.Task] = set()
+
+    def update_video_title(self, title: str):
+        """Update video title and refresh language domain priors."""
+        if title and title != self.video_title:
+            self.video_title = title
+            self.title_hints = extract_language_hints_from_title(title)
+            logger.info(f"[*] [Session {self.session_id[:6]}] Video title updated: '{title}' -> Language hints: {self.title_hints}")
 
     def set_anchor(self, audio_time: float, video_time: float, playback_rate: Optional[float] = None):
         """Re-anchors the audio-to-video timeline mapping."""
@@ -249,6 +291,44 @@ class WhatTubeServer:
                     timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
                 )
                 continue
+
+            # Out-of-Domain Noise Hallucination Filter:
+            # If language probability is marginal (< 0.40) and title hints exist,
+            # verify consistency with geographic/linguistic domain.
+            lang_code = asr_res.language.lower()
+            lang_prob = getattr(asr_res, "language_prob", 1.0)
+            if isinstance(lang_prob, (int, float)) and lang_prob < 0.40 and session.title_hints and lang_code not in session.title_hints:
+                south_asian = {"bn", "hi", "ur", "ar"}
+                east_asian = {"ja", "zh", "ko"}
+                southeast_asian = {"id", "ms", "th", "vi", "tl"}
+                european = {"fr", "es", "it", "de", "pt", "nl", "ru", "pl", "uk", "sv", "no", "fi"}
+
+                matched_family = False
+                for fam in [south_asian, east_asian, southeast_asian, european]:
+                    if any(h in fam for h in session.title_hints) and lang_code in fam:
+                        matched_family = True
+                        break
+
+                if not matched_family:
+                    discard_msg = (
+                        f"Acoustic hallucination: low-prob {lang_code.upper()} ({asr_res.language_prob:.2f}) "
+                        f"inconsistent with title hints {session.title_hints}"
+                    )
+                    logger.info(f"[*] [Session {session.session_id[:6]}] DISCARDED: {discard_msg}")
+                    self.audit_logger.log_event(
+                        event_id=event.event_id,
+                        start_sec=sub_start,
+                        end_sec=sub_end,
+                        duration_sec=sub_end - sub_start,
+                        trigger_reason=trigger_reason,
+                        asr_lang=asr_res.language,
+                        original_text=asr_res.text,
+                        translated_text="",
+                        is_emitted=False,
+                        discard_reason=discard_msg,
+                        timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
+                    )
+                    continue
 
             # Multi-window consensus & deduplication filter
             clean_curr = asr_res.text.strip().lower()
@@ -428,13 +508,14 @@ class WhatTubeServer:
                 target_lang=client_target.lower() if client_target else "en",
                 initial_video_time=vtime,
                 initial_playback_rate=prate,
+                video_title=str(init_data.get("video_title", "")),
             )
             self.sessions[session_id] = session
             self.ws_to_session[websocket] = session_id
             logger.info(
                 f"[+] Client authenticated & connected: session={session_id[:8]} "
                 f"(target_lang={session.target_lang}, video_time={vtime:.2f}s, rate={session.playback_rate}x, "
-                f"total active: {len(self.sessions)})"
+                f"title='{session.video_title}', hints={session.title_hints}, total active: {len(self.sessions)})"
             )
             await websocket.send(json.dumps({"type": "ready", "session_id": session_id}))
 
@@ -456,6 +537,9 @@ class WhatTubeServer:
                         if msg_type == "sync":
                             vtime = float(data.get("video_time", 0.0))
                             prate = float(data.get("playback_rate", session.playback_rate))
+                            vtitle = data.get("video_title")
+                            if vtitle:
+                                session.update_video_title(vtitle)
                             cur_audio = session.ring_buffer.current_time_sec
                             session.set_anchor(audio_time=cur_audio, video_time=vtime, playback_rate=prate)
 

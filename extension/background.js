@@ -37,7 +37,7 @@ async function ensureOffscreenDocument() {
 }
 
 // Start tab capture
-async function startCapture(tabId, targetLang = 'en') {
+async function startCapture(tabId, targetLang = 'en', videoTitle = '') {
   try {
     await ensureOffscreenDocument();
 
@@ -64,6 +64,7 @@ async function startCapture(tabId, targetLang = 'en') {
       tabId: tabId,
       targetLang: targetLang,
       authToken: authToken,
+      videoTitle: videoTitle,
     });
 
     // Notify content script that capture is active so it sends immediate video sync
@@ -71,7 +72,7 @@ async function startCapture(tabId, targetLang = 'en') {
       chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STARTED' }).catch(() => {});
     }, 300);
 
-    console.log(`[WhatTube] Started capture on tab ${tabId} (targetLang: ${targetLang})`);
+    console.log(`[WhatTube] Started capture on tab ${tabId} (targetLang: ${targetLang}, title: "${videoTitle}")`);
     return { ok: true };
   } catch (err) {
     console.error('[WhatTube] Failed to start capture:', err);
@@ -122,7 +123,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ isRecording: false, status: 'error', error: 'Cannot capture audio on system or extension tabs' });
             return;
           }
-          const result = await startCapture(tab.id, message.targetLang || state.targetLang);
+          const result = await startCapture(tab.id, message.targetLang || state.targetLang, tab.title || '');
           if (result.ok) {
             sendResponse({ isRecording: true, status: 'listening' });
           } else {
@@ -171,6 +172,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         type: message.type === 'VIDEO_SEEK' ? 'seek' : 'sync',
         video_time: message.video_time,
         playback_rate: message.playback_rate || 1.0,
+        video_title: message.video_title || '',
       },
     }).catch(() => {});
     return true;

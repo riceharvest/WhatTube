@@ -10,6 +10,7 @@ let currentTargetLang = "en";
 let currentVideoTime = 0.0;
 let currentPlaybackRate = 1.0;
 let currentAuthToken = "";
+let currentVideoTitle = "";
 
 let reconnectAttempts = 0;
 let reconnectTimer = null;
@@ -23,6 +24,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "START_CAPTURE") {
     currentTargetLang = message.targetLang || "en";
     currentAuthToken = message.authToken || "";
+    currentVideoTitle = message.videoTitle || "";
     startAudioProcessing(message.streamId);
   } else if (message.type === "STOP_CAPTURE") {
     stopAudioProcessing();
@@ -36,6 +38,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       if (message.data.playback_rate !== undefined) {
         currentPlaybackRate = message.data.playback_rate;
+      }
+      if (message.data.video_title !== undefined) {
+        currentVideoTitle = message.data.video_title;
       }
       sendControlMessage(message.data);
     }
@@ -76,6 +81,7 @@ function connectWebSocket() {
         target_lang: currentTargetLang,
         video_time: currentVideoTime,
         playback_rate: currentPlaybackRate,
+        video_title: currentVideoTitle,
       });
     };
 

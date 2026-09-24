@@ -122,6 +122,12 @@ class DynamicEventAggregator:
             return None
 
         # Active, but current window is clean English or silence
+        if is_clean_english:
+            # Confident English resumption detected! Finalize immediately at the end of
+            # foreign activity without padding into host speech, eliminating host dominance masking.
+            event = self._finalize_event(self.event_last_active_time, allow_short=True)
+            return event
+
         if (t_end - self.event_last_active_time) >= self.close_hangover_sec:
             event = self._finalize_event(self.event_last_active_time + self.post_roll_sec)
             return event
@@ -134,9 +140,10 @@ class DynamicEventAggregator:
             return self._finalize_event(self.event_last_active_time + self.post_roll_sec)
         return None
 
-    def _finalize_event(self, end_time: float) -> Optional[AudioEvent]:
+    def _finalize_event(self, end_time: float, allow_short: bool = False) -> Optional[AudioEvent]:
         start = self.event_start_time
-        end = max(end_time, start + self.min_event_sec)
+        min_sec = 1.2 if allow_short else self.min_event_sec
+        end = max(end_time, start + min_sec)
         duration = end - start
 
         event = AudioEvent(

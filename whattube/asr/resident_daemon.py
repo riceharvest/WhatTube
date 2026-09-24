@@ -172,9 +172,15 @@ async def transcribe(request: Request):
         if detected_lang.lower() == "en":
             is_discarded = True
             discard_reason = "Turbo ASR classified language as English"
+        elif language_prob < 0.25:
+            is_discarded = True
+            discard_reason = f"Low language confidence ({language_prob:.2f} < 0.25) in background noise"
         elif clean_lower in noise_hallucinations or any(clean_lower.startswith(h) for h in ["subtitles by", "translated by", "thank you for watching"]):
             is_discarded = True
             discard_reason = f"Noise hallucination filter: '{decoded_text}'"
+        elif len(clean_lower) <= 2 or clean_lower.isdigit():
+            is_discarded = True
+            discard_reason = f"Single token or digit noise: '{decoded_text}'"
 
         return {
             "language": detected_lang,

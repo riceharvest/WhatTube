@@ -50,7 +50,28 @@ def test_two_suspicious_windows():
     assert ev is not None
     print("test_two_suspicious_windows passed:", ev)
 
+def test_english_onset_truncation():
+    """Verify that confident English resumption closes the event immediately without padding."""
+    agg = DynamicEventAggregator(pre_roll_sec=0.5, post_roll_sec=0.5, close_hangover_sec=0.8)
+
+    # Window 0: Foreign chatter trigger (Hindi / Indonesian)
+    ev = agg.update(10.0, 13.0, True, {"p_en": 0.05})
+    assert agg.is_active
+
+    # Window 1: Continued foreign chatter
+    ev = agg.update(11.0, 14.0, True, {"p_en": 0.10})
+    assert agg.is_active
+
+    # Window 2: Host resumes clean English (p_en = 0.92 >= lid_english_safe)
+    ev = agg.update(12.0, 15.0, True, {"p_en": 0.92})
+    assert ev is not None
+    assert not agg.is_active
+    # End time should be pinned to the last foreign window end (14.0s), NOT padded with post_roll (14.5s)
+    assert ev.end_sec == 14.0
+    assert ev.start_sec == 9.5  # 10.0 - 0.5 pre_roll
+
 if __name__ == "__main__":
     test_single_immediate_trigger()
     test_two_suspicious_windows()
+    test_english_onset_truncation()
     print("All aggregator tests passed!")

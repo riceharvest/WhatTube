@@ -185,3 +185,37 @@ async def test_multi_client_session_private_routing(mock_server):
     
     # Client B must receive NOTHING
     ws_b.send.assert_not_called()
+
+def test_title_hints_extraction():
+    from whattube.server import extract_language_hints_from_title
+    assert "ja" in extract_language_hints_from_title("Japanese Food Tour - HIDDEN-GEMS in Tokyo, Japan")
+    assert "bn" in extract_language_hints_from_title("I Traveled to Dhaka, Bangladesh at 3AM")
+    assert "id" in extract_language_hints_from_title("41 Hours in Jakarta, Indonesia")
+    assert "th" in extract_language_hints_from_title("Thailand Street Food - 5 MUST-EAT Thai Noodle Soups in Bangkok!!")
+    assert extract_language_hints_from_title("Random video without country") == set()
+
+@pytest.mark.asyncio
+async def test_out_of_domain_hallucination_filtered(mock_server):
+    """Verify that a low-probability out-of-domain language (e.g. Russian in Dhaka) is discarded."""
+    ws = AsyncMock()
+    session = SessionState("sess-dhaka", ws, mock_server.config, video_title="I Traveled to Dhaka, Bangladesh")
+    mock_server.sessions["sess-dhaka"] = session
+
+    event = AudioEvent(event_id=1, start_sec=1.0, end_sec=4.0, duration_sec=3.0)
+
+    # Low-prob Russian hallucination (prob=0.33 < 0.40) in Bangladesh video
+    mock_asr = MagicMock()
+    mock_asr.language = "ru"
+    mock_asr.language_prob = 0.33
+    mock_asr.text = "Пойди сюда"
+    mock_asr.is_discarded = False
+    mock_asr.discard_reason = ""
+    mock_server.asr_client.transcribe = MagicMock(return_value=mock_asr)
+
+    dummy_audio = np.zeros(16000 * 5, dtype=np.float32)
+    session.ring_buffer.append(dummy_audio)
+
+    await mock_server.handle_event_burst(session, event, event_epoch=session.epoch, stage1_latency_ms=5.0)
+
+    # Discarded: no caption sent to client
+    ws.send.assert_not_called()
