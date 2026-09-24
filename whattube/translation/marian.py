@@ -13,6 +13,8 @@ class MarianTranslator(BaseTranslator):
         self.device = device
         # Cache of (src, tgt) -> (model, tokenizer)
         self.models: Dict[Tuple[str, str], Tuple[MarianMTModel, MarianTokenizer]] = {}
+        import threading
+        self._lock = threading.Lock()
 
     def _get_model_id(self, src: str, tgt: str) -> str:
         # Common language code normalizations
@@ -22,20 +24,37 @@ class MarianTranslator(BaseTranslator):
 
     def _load_model(self, src: str, tgt: str) -> Optional[Tuple[MarianMTModel, MarianTokenizer]]:
         pair = (src, tgt)
-        if pair in self.models:
-            return self.models[pair]
+        with self._lock:
+            if pair in self.models:
+                return self.models[pair]
 
-        model_id = self._get_model_id(src, tgt)
-        try:
-            print(f"[*] Loading translation model on CPU: {model_id}")
-            tokenizer = MarianTokenizer.from_pretrained(model_id)
-            model = MarianMTModel.from_pretrained(model_id).to(self.device)
+            model_id = self._get_model_id(src, tgt)
+            try:
+                # First try loading strictly from local cache to avoid huggingface network roundtrip
+                tokenizer = MarianTokenizer.from_pretrained(model_id, local_files_only=True)
+                model = MarianMTModel.from_pretrained(model_id, local_files_only=True).to(self.device)
+            except Exception:
+                try:
+                    print(f"[*] Downloading translation model to cache: {model_id}")
+                    tokenizer = MarianTokenizer.from_pretrained(model_id)
+                    model = MarianMTModel.from_pretrained(model_id).to(self.device)
+                except Exception as e:
+                    print(f"[-] Could not load Marian model for {pair}: {e}")
+                    return None
+
             model.eval()
             self.models[pair] = (model, tokenizer)
             return model, tokenizer
-        except Exception as e:
-            print(f"[-] Could not load Marian model for {pair}: {e}")
-            return None
+
+    def normalize_slang(self, text: str, lang: str) -> str:
+        """Lightweight regex normalizer for common conversational/internet slang."""
+        import re
+        if lang.lower() == "id":
+            # Indonesian TikTok live / street colloquialisms
+            text = re.sub(r"\b(tetep|tag|ketek)\s+layarnya\b", "tekan layarnya", text, flags=re.IGNORECASE)
+            text = re.sub(r"\b(ngeplok|nge-flop)\b", "nge-vlog", text, flags=re.IGNORECASE)
+            text = re.sub(r"\bsampai\s+(petiak|berjalan)\b", "sampai pecah", text, flags=re.IGNORECASE)
+        return text
 
     def translate(
         self,
@@ -44,7 +63,7 @@ class MarianTranslator(BaseTranslator):
         target_lang: str = "en",
     ) -> TranslationResult:
         t0 = time.perf_counter()
-        clean_text = text.strip()
+        clean_text = self.normalize_slang(text.strip(), source_lang)
 
         if not clean_text or source_lang.lower() == target_lang.lower():
             return TranslationResult(

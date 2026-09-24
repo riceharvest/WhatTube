@@ -60,6 +60,8 @@ class WhatTubeServer:
 
         logger.info("[*] Initializing CPU Marian Translator...")
         self.translator = MarianTranslator(device="cpu")
+        # Pre-warm default target language model
+        self.translator._load_model("id", config.target_language)
 
         self.audit_logger = EventAuditLogger(log_path=config.log_file)
         self.clients: Set[websockets.WebSocketServerProtocol] = set()

@@ -89,6 +89,14 @@ async def transcribe(request: Request):
             "discard_reason": "Audio chunk too short (<100ms)",
         })
 
+    # High-pass filter (85 Hz cutoff) to eliminate traffic/scooter rumble
+    try:
+        from scipy.signal import butter, sosfilt
+        sos = butter(2, 85, 'hp', fs=sr, output='sos')
+        audio = sosfilt(sos, audio).astype(np.float32)
+    except Exception:
+        pass
+
     dtype = torch.float16 if device in ["xpu", "cuda"] else torch.float32
     inputs = processor(audio, sampling_rate=16000, return_tensors="pt").input_features.to(device, dtype=dtype)
 
@@ -96,6 +104,8 @@ async def transcribe(request: Request):
         gen_out = model.generate(
             inputs,
             max_new_tokens=64,
+            repetition_penalty=1.15,
+            no_repeat_ngram_size=3,
             return_dict_in_generate=True,
         )
 

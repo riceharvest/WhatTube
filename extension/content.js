@@ -45,9 +45,31 @@ function displayCaption(caption) {
     dismissTimeout = null;
   }
 
-  // Remove existing card if present
+  // If active card exists, smoothly morph text in-place
   if (activeCard && activeCard.parentNode) {
-    activeCard.parentNode.removeChild(activeCard);
+    const transEl = activeCard.querySelector(".whattube-translation");
+    const origEl = activeCard.querySelector(".whattube-original");
+    const badgeEl = activeCard.querySelector(".whattube-badge");
+
+    if (transEl && origEl) {
+      transEl.textContent = caption.translation;
+      origEl.textContent = `“${caption.original}”`;
+      if (badgeEl) badgeEl.textContent = langCode;
+      activeCard.classList.remove("whattube-fade-out");
+
+      // Reset auto-dismiss timer
+      const displayDurationMs = Math.max(4500, (caption.end - caption.start + 2.5) * 1000);
+      dismissTimeout = setTimeout(() => {
+        activeCard.classList.add("whattube-fade-out");
+        setTimeout(() => {
+          if (activeCard && activeCard.parentNode) {
+            activeCard.parentNode.removeChild(activeCard);
+          }
+          activeCard = null;
+        }, 400);
+      }, displayDurationMs);
+      return;
+    }
   }
 
   const card = document.createElement("div");
