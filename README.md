@@ -93,7 +93,7 @@ Evaluated on a continuous **41-minute, 15-second** travel vlog recorded on locat
 
 ### 2. Clone and Setup Environment
 ```bash
-git clone https://github.com/myappleiddarimaan/WhatTube.git
+git clone https://github.com/riceharvest/WhatTube.git
 cd WhatTube
 
 # Create virtual environment and install dependencies
