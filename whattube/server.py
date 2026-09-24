@@ -292,27 +292,21 @@ class WhatTubeServer:
                 )
                 continue
 
-            # Out-of-Domain Noise Hallucination Filter:
-            # If language probability is marginal (< 0.40) and title hints exist,
-            # verify consistency with geographic/linguistic domain.
+            # Bayesian Confidence & Out-of-Domain Filter:
+            # - In-domain/local speech (matching title hints): threshold relaxed to p >= 0.15 to capture noisy street chatter
+            # - Out-of-domain speech with title hints: threshold tightened to p >= 0.40 to reject acoustic hallucinations
+            # - No title hints available: default p >= 0.25
             lang_code = asr_res.language.lower()
             lang_prob = getattr(asr_res, "language_prob", 1.0)
-            if isinstance(lang_prob, (int, float)) and lang_prob < 0.40 and session.title_hints and lang_code not in session.title_hints:
-                south_asian = {"bn", "hi", "ur", "ar"}
-                east_asian = {"ja", "zh", "ko"}
-                southeast_asian = {"id", "ms", "th", "vi", "tl"}
-                european = {"fr", "es", "it", "de", "pt", "nl", "ru", "pl", "uk", "sv", "no", "fi"}
-
-                matched_family = False
-                for fam in [south_asian, east_asian, southeast_asian, european]:
-                    if any(h in fam for h in session.title_hints) and lang_code in fam:
-                        matched_family = True
-                        break
-
-                if not matched_family:
+            if isinstance(lang_prob, (int, float)):
+                # Only languages directly matching title hints get the relaxed local prior (p >= 0.15).
+                # All other languages in foreign destination require high confidence (p >= 0.40).
+                is_local = bool(session.title_hints and lang_code in session.title_hints)
+                min_prob = 0.15 if is_local else (0.40 if session.title_hints else 0.25)
+                if lang_prob < min_prob:
                     discard_msg = (
-                        f"Acoustic hallucination: low-prob {lang_code.upper()} ({asr_res.language_prob:.2f}) "
-                        f"inconsistent with title hints {session.title_hints}"
+                        f"Confidence gate: low-prob {lang_code.upper()} ({lang_prob:.2f} < {min_prob:.2f}) "
+                        f"{'inconsistent with' if not is_local and session.title_hints else 'below confidence floor for'} title hints {session.title_hints}"
                     )
                     logger.info(f"[*] [Session {session.session_id[:6]}] DISCARDED: {discard_msg}")
                     self.audit_logger.log_event(
