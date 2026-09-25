@@ -318,10 +318,8 @@ class WhatTubeServer:
                                     fallback_asr = await loop.run_in_executor(
                                         None, self.asr_client.transcribe, f_audio, self.config.sample_rate
                                     )
-                                    fb_words = fallback_asr.text.strip().split()
                                     fb_is_en = (fallback_asr.language.lower() == "en")
-                                    fb_is_monologue = fb_is_en and (len(fb_words) >= 5 or min_stage1_p_en >= 0.35)
-                                    if not fallback_asr.is_discarded and not fb_is_monologue:
+                                    if not fallback_asr.is_discarded and not fb_is_en:
                                         logger.info(
                                             f"[*] [Session {session.session_id[:6]}] Sub-slice fallback SUCCESS: "
                                             f"isolated [{f_start:.2f}s - {f_end:.2f}s] from [{sub_start:.2f}s - {sub_end:.2f}s] -> "
@@ -329,14 +327,11 @@ class WhatTubeServer:
                                         )
                                         sub_start, sub_end, sub_audio = f_start, f_end, f_audio
                                         asr_res = fallback_asr
-                                        is_english = (asr_res.language.lower() == "en")
-                                        words = asr_res.text.strip().split()
-                                        word_count = len(words)
-                                        is_english_monologue = False
+                                        is_english = False
 
-            # Turbo Language Gate Filter: Discard daemon discards or English monologues
-            if asr_res.is_discarded or is_english_monologue:
-                discard_reason = asr_res.discard_reason or "Turbo ASR classified language as English monologue"
+            # Turbo Language Gate Filter: Discard daemon discards or English speech when translating to English
+            if asr_res.is_discarded or (is_english and session.target_lang == "en"):
+                discard_reason = asr_res.discard_reason or "Language is English (no translation needed)"
                 logger.info(
                     f"[x] [Session {session.session_id[:6]}] Sub-Event [{sub_start:.2f}s - {sub_end:.2f}s] DISCARDED: "
                     f"{discard_reason} (lang={asr_res.language}, text='{asr_res.text}')"

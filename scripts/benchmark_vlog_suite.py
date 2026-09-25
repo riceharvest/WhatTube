@@ -190,23 +190,18 @@ def run_vlog_benchmark(
                     if (f_end - f_start) <= 0.75 * (sub_end - sub_start) and (f_end - f_start) >= 0.8:
                         f_audio = audio[int(f_start * sr) : int(f_end * sr)]
                         fb_asr = call_asr(f_audio)
-                        fb_words = fb_asr.get("text", "").strip().split()
                         fb_is_en = (fb_asr.get("language", "").lower() == "en")
-                        fb_is_monologue = fb_is_en and (len(fb_words) >= 5 or min_stage1_p_en >= 0.35)
-                        if not fb_asr.get("is_discarded", False) and not fb_is_monologue:
+                        if not fb_asr.get("is_discarded", False) and not fb_is_en:
                             asr_res = fb_asr
                             sub_start, sub_end = f_start, f_end
                             lang = asr_res.get("language", "").lower()
                             prob = asr_res.get("language_prob", 1.0)
                             text = asr_res.get("text", "").strip()
                             is_discarded = False
-                            is_english = (lang == "en")
-                            words = text.split()
-                            word_count = len(words)
-                            is_english_monologue = False
+                            is_english = False
 
             # Discard check
-            if is_discarded or is_english_monologue:
+            if is_discarded or (is_english and target_lang == "en"):
                 discarded_english += 1
                 results.append({
                     "event_id": evt.event_id,
