@@ -172,11 +172,15 @@ async def transcribe(request: Request):
         noise_hallucinations = {
             "", ".", "...", "!", "?", "♪", "[music]",
             "thank you", "thank you.", "thank you for watching", "thank you for watching.",
-            "please subscribe", "subscribe", "subtitles by"
+            "please subscribe", "subscribe", "subtitles by",
+            "реклама", "реклама.", "подпишись", "advertisement", "promotion",
         }
         clean_lower = decoded_text.lower().strip()
         stripped_word = clean_lower.strip("[]().,!?:;-\"'/~")
-        acoustic_descriptions = {"music", "musik", "musica", "musique", "applause", "cheering", "laughter", "chatter", "silence"}
+        acoustic_descriptions = {
+            "music", "musik", "musica", "musique", "applause", "cheering",
+            "laughter", "chatter", "silence", "реклама", "advertising",
+        }
 
         if detected_lang.lower() == "en":
             is_discarded = True

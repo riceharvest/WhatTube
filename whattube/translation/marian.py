@@ -16,9 +16,20 @@ try:
 except ImportError:
     HAS_CTRANSLATE2 = False
 
+LANGUAGE_MODEL_ALIASES = {
+    "pt": "roa",       # Portuguese maps to Helsinki-NLP Romance-to-English
+    "fil": "tl",      # Filipino maps to Tagalog
+    "tagalog": "tl",
+    "yue": "zh",      # Cantonese maps to Chinese
+    "cantonese": "zh",
+    "ms": "id",       # Malay maps to Indonesian
+    "malay": "id",
+    "el": "grk",      # Greek maps to Helsinki-NLP Greek-to-English (opus-mt-grk-en)
+    "greek": "grk",
+}
+
 class MarianTranslator(BaseTranslator):
     """Translates text on CPU using CTranslate2 INT8 accelerated Helsinki-NLP/opus-mt models,
-
     with bounded LRU caching and automatic fallback to PyTorch MarianMTModel.
     """
 
@@ -27,7 +38,7 @@ class MarianTranslator(BaseTranslator):
         device: str = "cpu",
         cache_dir: str = "models",
         use_ct2: bool = True,
-        max_cached_models: int = 3,
+        max_cached_models: int = 5,
     ):
         self.device = device
         self.cache_dir = cache_dir
@@ -40,12 +51,14 @@ class MarianTranslator(BaseTranslator):
         self._lock = threading.Lock()
 
     def _get_model_id(self, src: str, tgt: str) -> str:
-        return f"Helsinki-NLP/opus-mt-{src}-{tgt}"
+        mapped_src = LANGUAGE_MODEL_ALIASES.get(src.lower(), src.lower())
+        mapped_tgt = LANGUAGE_MODEL_ALIASES.get(tgt.lower(), tgt.lower())
+        return f"Helsinki-NLP/opus-mt-{mapped_src}-{mapped_tgt}"
 
     def _get_ct2_dir(self, src: str, tgt: str) -> str:
-        src_clean = src.replace("-", "_")
-        tgt_clean = tgt.replace("-", "_")
-        return os.path.join(self.cache_dir, f"ct2_opus_mt_{src_clean}_{tgt_clean}")
+        mapped_src = LANGUAGE_MODEL_ALIASES.get(src.lower(), src.lower()).replace("-", "_")
+        mapped_tgt = LANGUAGE_MODEL_ALIASES.get(tgt.lower(), tgt.lower()).replace("-", "_")
+        return os.path.join(self.cache_dir, f"ct2_opus_mt_{mapped_src}_{mapped_tgt}")
 
     def prefetch(self, src: str, tgt: str) -> bool:
         """Prefetch and pre-convert a language pair into local INT8 cache."""

@@ -21,3 +21,19 @@ def test_translation_lru_cache_bounded():
     res = translator.translate("Halo apa kabar", "id", "en")
     assert res.is_success
     assert len(res.translated_text) > 0
+
+def test_language_model_aliases():
+    """Verify that language codes without direct opus-mt-{src}-{tgt} are mapped properly."""
+    translator = MarianTranslator(use_ct2=False)
+    assert translator._get_model_id("pt", "en") == "Helsinki-NLP/opus-mt-roa-en"
+    assert translator._get_model_id("el", "en") == "Helsinki-NLP/opus-mt-grk-en"
+    assert translator._get_model_id("fil", "en") == "Helsinki-NLP/opus-mt-tl-en"
+    assert translator._get_model_id("yue", "en") == "Helsinki-NLP/opus-mt-zh-en"
+    assert translator._get_model_id("ms", "en") == "Helsinki-NLP/opus-mt-id-en"
+
+def test_portuguese_translation_ct2():
+    """Verify Portuguese translates via mapped roa-en model."""
+    translator = MarianTranslator(use_ct2=True)
+    res = translator.translate("Obrigado", "pt", "en")
+    assert res.is_success
+    assert "thank" in res.translated_text.lower()

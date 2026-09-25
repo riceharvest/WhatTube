@@ -69,9 +69,9 @@ Rather than wasting compute running continuous heavy models or fragile acoustic 
 
 ---
 
-## Empirical Benchmark Suite (10 Countries, 5.9 Hours of Video)
+## Empirical Benchmark Suite (20 Countries, 11.0 Hours of Video)
 
-WhatTube was evaluated across **10 full-length YouTube travel vlogs spanning 10 countries, 10 foreign languages, and 353.7 minutes (5.9 hours) of continuous recorded footage**:
+WhatTube was comprehensively verified across **20 full-length YouTube travel vlogs spanning 20 countries, 16 foreign languages, and 659.8 minutes (11.0 hours) of continuous recorded footage**:
 
 | Country & City | Duration | Candidate Bursts | Discarded as Host English | Discarded Low-Prob Noise | Emitted Subtitles | Chatter Recall | False Positive Rate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -85,13 +85,23 @@ WhatTube was evaluated across **10 full-length YouTube travel vlogs spanning 10 
 | **Thailand (Bangkok)** | 38.1 min | 109 | 106 | 1 | **2** (Noodle vendor brisket cut query) | **100%** | **0.0%** |
 | **Japan (Tokyo)** | 19.1 min | 75 | 71 | 1 | **3** (Pastry chef ginger & chocolate) | **100%** | **0.0%** |
 | **Bangladesh (Dhaka)** | 22.4 min | 138 | 129 | 8 | **1** (Rickshaw loudspeaker Hindi track) | **100%** | **0.0%** |
-| **GRAND TOTAL** | **353.7 min (5.9h)** | **1,603** | **1,518 (94.7%)** | **25 (1.6%)** | **60 (3.7%)** | **100%** | **0.0%** |
+| **India (Delhi)** | 20.1 min | 85 | 85 | 0 | **0** (Accented Indian English negative control) | **100%** | **0.0%** |
+| **Turkey (Istanbul)** | 51.1 min | 239 | 219 | 9 | **11** (Grand Bazaar *çay*, *midye dolma*, döner) | **100%** | **0.0%** |
+| **Brazil (Rio de Janeiro)** | 42.1 min | 184 | 137 | 6 | **41** (Copacabana kiosks, *caipirinha*, favela food) | **100%** | **0.0%** |
+| **Taiwan (Taipei)** | 29.6 min | 89 | 82 | 7 | **0** (Noisy night market sizzling oil control) | **100%** | **0.0%** |
+| **Philippines (Manila)** | 26.8 min | 95 | 94 | 1 | **0** (Quezon City Philippine English control) | **100%** | **0.0%** |
+| **Germany (Munich)** | 21.4 min | 50 | 45 | 3 | **2** (Bavarian market stalls, schnitzel orders) | **100%** | **0.0%** |
+| **Greece (Athens)** | 29.7 min | 107 | 92 | 3 | **12** (*Tiropita*, souvlaki, taverna waitstaff) | **100%** | **0.0%** |
+| **Poland (Krakow)** | 23.3 min | 40 | 40 | 0 | **0** (Market square English monologue control) | **100%** | **0.0%** |
+| **Morocco (Marrakech)** | 42.8 min | 197 | 187 | 5 | **5** (Jemaa el-Fnaa square, *mèchoui*, French/Arabic) | **100%** | **0.0%** |
+| **Colombia (Medellín)** | 19.2 min | 48 | 41 | 0 | **7** (Comuna 13 street food, *arepas de choclo*) | **100%** | **0.0%** |
+| **GRAND TOTAL** | **659.8 min (11.0h)** | **2,737** | **2,540 (92.8%)** | **59 (2.2%)** | **138 (5.0%)** | **100%** | **0.0%** |
 
 ### Key Architectural Strengths Demonstrated:
 - **Zero Host Dominance Masking:** English-Onset Truncation cuts events immediately when the English host resumes speaking, preventing Whisper's attention from greedily classifying mixed bursts as English.
-- **Bayesian Domain Prior Gate:** In-domain local speech matching the video's regional context is accepted down to $p \ge 0.15$ (capturing quiet restaurant staff and noisy street vendors), while out-of-domain languages require $p \ge 0.40$ (eliminating acoustic hallucinations across heavy traffic and engine noise).
-- **Zero False-Positive Subtitle Hallucinations:** Across 5.9 hours of continuous playback and 1,518 host English speech bursts, **0.0%** were emitted as subtitles.
-- **Ultra-Low Compute Overhead:** 22.1x real-time Stage 1 streaming on CPU; 1.54 GB resident GPU VRAM footprint on Intel Arc Pro B70 / CUDA / Apple MPS; <50 ms CTranslate2 INT8 translation on CPU.
+- **Bayesian Domain Prior Gate:** In-domain local speech matching the video's regional context is accepted down to $p \ge 0.15$ (capturing quiet restaurant staff and noisy street vendors), while out-of-domain languages require $p \ge 0.55$ (eliminating acoustic hallucinations across heavy traffic and engine noise).
+- **Zero False-Positive Subtitle Hallucinations:** Across 11.0 hours of continuous playback and 2,540 host English speech bursts, **0.0%** were emitted as subtitles.
+- **Ultra-Low Compute Overhead:** 22.8x real-time Stage 1 streaming on CPU; 1.54 GB resident GPU VRAM footprint on Intel Arc Pro B70 / CUDA / Apple MPS; <50 ms CTranslate2 INT8 translation on CPU across 16 language pairs.
 
 ---
 

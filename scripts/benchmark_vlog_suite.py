@@ -145,7 +145,7 @@ def run_vlog_benchmark(
 
         # Bayesian confidence filter
         is_local = bool(title_hints and lang in title_hints)
-        min_prob = 0.15 if is_local else (0.40 if title_hints else 0.25)
+        min_prob = 0.15 if is_local else (0.55 if title_hints else 0.25)
         if prob < min_prob:
             discarded_confidence += 1
             reason = f"Low prob {lang.upper()} ({prob:.2f} < {min_prob:.2f})"

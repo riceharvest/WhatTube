@@ -25,19 +25,22 @@ TITLE_KEYWORD_LANG_MAP = {
     "japan": "ja", "japanese": "ja", "tokyo": "ja", "osaka": "ja", "kyoto": "ja", "ramen": "ja", "sushi": "ja",
     "indonesia": "id", "indonesian": "id", "jakarta": "id", "bali": "id",
     "bangladesh": "bn", "bengali": "bn", "dhaka": "bn", "bangla": "bn",
-    "thailand": "th", "thai": "th", "bangkok": "th", "phuket": "th",
-    "korea": "ko", "korean": "ko", "seoul": "ko",
-    "china": "zh", "chinese": "zh", "taiwan": "zh", "beijing": "zh", "shanghai": "zh",
-    "france": "fr", "french": "fr", "paris": "fr",
-    "spain": "es", "spanish": "es", "mexico": "es", "colombia": "es", "madrid": "es", "barcelona": "es",
-    "italy": "it", "italian": "it", "rome": "it", "milan": "it", "naples": "it",
-    "germany": "de", "german": "de", "berlin": "de", "munich": "de",
-    "vietnam": "vi", "vietnamese": "vi", "hanoi": "vi", "saigon": "vi",
-    "india": "hi", "hindi": "hi", "mumbai": "hi", "delhi": "hi",
-    "arab": "ar", "arabic": "ar", "egypt": "ar", "cairo": "ar", "dubai": "ar", "morocco": "ar",
+    "thailand": "th", "thai": "th", "bangkok": "th", "phuket": "th", "chiang mai": "th",
+    "korea": "ko", "korean": "ko", "seoul": "ko", "busan": "ko",
+    "china": "zh", "chinese": "zh", "taiwan": "zh", "beijing": "zh", "shanghai": "zh", "hong kong": "zh", "cantonese": "zh", "taipei": "zh",
+    "france": "fr", "french": "fr", "paris": "fr", "nice": "fr", "lyon": "fr",
+    "spain": "es", "spanish": "es", "mexico": "es", "colombia": "es", "madrid": "es", "barcelona": "es", "oaxaca": "es", "cancun": "es", "argentina": "es", "buenos aires": "es", "peru": "es", "lima": "es", "medellin": "es",
+    "italy": "it", "italian": "it", "rome": "it", "milan": "it", "naples": "it", "venice": "it", "florence": "it", "sicily": "it",
+    "germany": "de", "german": "de", "berlin": "de", "munich": "de", "vienna": "de", "austria": "de", "zurich": "de", "swiss": "de",
+    "vietnam": "vi", "vietnamese": "vi", "hanoi": "vi", "saigon": "vi", "da nang": "vi",
+    "india": "hi", "hindi": "hi", "mumbai": "hi", "delhi": "hi", "varanasi": "hi", "kolkata": "hi", "jaipur": "hi", "indian": "hi",
+    "arab": "ar", "arabic": "ar", "egypt": "ar", "cairo": "ar", "dubai": "ar", "morocco": "ar", "marrakech": "ar", "casablanca": "ar", "jordan": "ar", "amman": "ar",
     "russia": "ru", "russian": "ru", "moscow": "ru",
-    "poland": "pl", "polish": "pl", "warsaw": "pl",
-    "turkey": "tr", "turkish": "tr", "istanbul": "tr",
+    "poland": "pl", "polish": "pl", "warsaw": "pl", "krakow": "pl",
+    "turkey": "tr", "turkish": "tr", "istanbul": "tr", "antalya": "tr", "ankara": "tr",
+    "brazil": "pt", "brazilian": "pt", "portugal": "pt", "portuguese": "pt", "rio": "pt", "sao paulo": "pt", "lisbon": "pt",
+    "philippines": "tl", "filipino": "tl", "tagalog": "tl", "manila": "tl", "cebu": "tl",
+    "greece": "el", "greek": "el", "athens": "el", "santorini": "el",
 }
 
 def extract_language_hints_from_title(title: str) -> Set[str]:
@@ -294,15 +297,15 @@ class WhatTubeServer:
 
             # Bayesian Confidence & Out-of-Domain Filter:
             # - In-domain/local speech (matching title hints): threshold relaxed to p >= 0.15 to capture noisy street chatter
-            # - Out-of-domain speech with title hints: threshold tightened to p >= 0.40 to reject acoustic hallucinations
+            # - Out-of-domain speech with title hints: threshold tightened to p >= 0.55 to reject acoustic hallucinations
             # - No title hints available: default p >= 0.25
             lang_code = asr_res.language.lower()
             lang_prob = getattr(asr_res, "language_prob", 1.0)
             if isinstance(lang_prob, (int, float)):
                 # Only languages directly matching title hints get the relaxed local prior (p >= 0.15).
-                # All other languages in foreign destination require high confidence (p >= 0.40).
+                # All other languages in foreign destination require high confidence (p >= 0.55).
                 is_local = bool(session.title_hints and lang_code in session.title_hints)
-                min_prob = 0.15 if is_local else (0.40 if session.title_hints else 0.25)
+                min_prob = 0.15 if is_local else (0.55 if session.title_hints else 0.25)
                 if lang_prob < min_prob:
                     discard_msg = (
                         f"Confidence gate: low-prob {lang_code.upper()} ({lang_prob:.2f} < {min_prob:.2f}) "
