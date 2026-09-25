@@ -1,19 +1,19 @@
 """Resident ASR Microservice for persistent GPU Whisper (large-v3-turbo)."""
 
+import argparse
+import asyncio
 import io
 import time
-import asyncio
-import argparse
+from contextlib import asynccontextmanager
 from math import gcd
+
 import numpy as np
 import soundfile as sf
 import torch
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-import uvicorn
-from transformers import WhisperProcessor, WhisperForConditionalGeneration
-
-from contextlib import asynccontextmanager
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 # Global state
 processor = None
@@ -105,7 +105,7 @@ async def transcribe(request: Request):
             g = gcd(sr, 16000)
             audio = resample_poly(audio, 16000 // g, sr // g).astype(np.float32)
             sr = 16000
-    except Exception:
+    except (sf.SoundFileError, RuntimeError, ValueError):
         # Fallback to raw float32 LE if valid
         if len(body) % 4 != 0:
             return JSONResponse({"error": "Malformed audio payload: unrecognized container and length not divisible by 4"}, status_code=400)
@@ -159,7 +159,7 @@ async def transcribe(request: Request):
                 if token_tag in lang_tokens_list:
                     idx = lang_tokens_list.index(token_tag)
                     language_prob = round(float(lang_probs[idx].item()), 4)
-            except Exception:
+            except (IndexError, KeyError, RuntimeError, ValueError):
                 language_prob = 1.0
 
         # Extract text (skip special tokens)

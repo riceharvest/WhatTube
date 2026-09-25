@@ -1,13 +1,16 @@
-"""MarianMT multilingual translation backend with CTranslate2 INT8 acceleration, LRU cache, and on-demand model routing."""
-
+import logging
 import os
-import time
 import threading
+import time
 from collections import OrderedDict
-from typing import Dict, Tuple, Optional
+from typing import Any
+
 import torch
 from transformers import MarianMTModel, MarianTokenizer
+
 from whattube.translation.base import BaseTranslator, TranslationResult
+
+logger = logging.getLogger("WhatTube.Marian")
 
 try:
     import ctranslate2
@@ -46,8 +49,8 @@ class MarianTranslator(BaseTranslator):
         self.max_cached_models = max_cached_models
 
         # Bounded LRU caches: (src, tgt) -> (model/translator, tokenizer)
-        self.models: OrderedDict[Tuple[str, str], Tuple[MarianMTModel, MarianTokenizer]] = OrderedDict()
-        self.ct2_models: OrderedDict[Tuple[str, str], Tuple[any, MarianTokenizer]] = OrderedDict()
+        self.models: OrderedDict[tuple[str, str], tuple[MarianMTModel, MarianTokenizer]] = OrderedDict()
+        self.ct2_models: OrderedDict[tuple[str, str], tuple[any, MarianTokenizer]] = OrderedDict()
         self._lock = threading.Lock()
 
     def _get_model_id(self, src: str, tgt: str) -> str:
@@ -66,7 +69,7 @@ class MarianTranslator(BaseTranslator):
             return True
         return self._load_ct2_model(src.lower(), tgt.lower()) is not None
 
-    def _load_ct2_model(self, src: str, tgt: str) -> Optional[Tuple[any, MarianTokenizer]]:
+    def _load_ct2_model(self, src: str, tgt: str) -> tuple[Any, MarianTokenizer] | None:
         """Loads or converts a CTranslate2 INT8 model with bounded LRU eviction."""
         if not self.use_ct2:
             return None
@@ -82,23 +85,23 @@ class MarianTranslator(BaseTranslator):
 
             try:
                 tokenizer = MarianTokenizer.from_pretrained(model_id, local_files_only=True)
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 try:
                     tokenizer = MarianTokenizer.from_pretrained(model_id)
-                except Exception as e:
-                    print(f"[-] Could not load Marian tokenizer for {model_id}: {e}")
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.warning(f"[-] Could not load Marian tokenizer for {model_id}: {e}")
                     return None
 
             # Check if CT2 model directory exists
             if not (os.path.isdir(ct2_dir) and os.path.exists(os.path.join(ct2_dir, "model.bin"))):
                 try:
-                    print(f"[*] Converting {model_id} to CTranslate2 INT8 in {ct2_dir}...")
+                    logger.info(f"[*] Converting {model_id} to CTranslate2 INT8 in {ct2_dir}...")
                     os.makedirs(self.cache_dir, exist_ok=True)
                     converter = TransformersConverter(model_id, low_cpu_mem_usage=True)
                     converter.convert(ct2_dir, quantization="int8", force=True)
-                    print(f"[+] Converted {model_id} to CT2 INT8 successfully.")
-                except Exception as e:
-                    print(f"[-] CT2 conversion failed for {model_id}: {e}")
+                    logger.info(f"[+] Converted {model_id} to CT2 INT8 successfully.")
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.error(f"[-] CT2 conversion failed for {model_id}: {e}")
                     return None
 
             try:
@@ -112,16 +115,16 @@ class MarianTranslator(BaseTranslator):
 
                 # Bounded LRU eviction
                 if len(self.ct2_models) >= self.max_cached_models:
-                    evicted_pair, (evicted_trans, _) = self.ct2_models.popitem(last=False)
+                    _evicted_pair, (evicted_trans, _) = self.ct2_models.popitem(last=False)
                     del evicted_trans
 
                 self.ct2_models[pair] = (ct2_translator, tokenizer)
                 return ct2_translator, tokenizer
-            except Exception as e:
-                print(f"[-] Failed to instantiate CTranslate2 Translator for {pair}: {e}")
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.warning(f"[-] Failed to instantiate CTranslate2 Translator for {pair}: {e}")
                 return None
 
-    def _load_model(self, src: str, tgt: str) -> Optional[Tuple[MarianMTModel, MarianTokenizer]]:
+    def _load_model(self, src: str, tgt: str) -> tuple[MarianMTModel, MarianTokenizer] | None:
         """Fallback PyTorch loader with bounded LRU eviction."""
         pair = (src, tgt)
         with self._lock:
@@ -133,18 +136,18 @@ class MarianTranslator(BaseTranslator):
             try:
                 tokenizer = MarianTokenizer.from_pretrained(model_id, local_files_only=True)
                 model = MarianMTModel.from_pretrained(model_id, local_files_only=True).to(self.device)
-            except Exception:
+            except (OSError, RuntimeError, ValueError):
                 try:
                     tokenizer = MarianTokenizer.from_pretrained(model_id)
                     model = MarianMTModel.from_pretrained(model_id).to(self.device)
-                except Exception as e:
-                    print(f"[-] Could not load Marian PyTorch model for {model_id}: {e}")
+                except (OSError, RuntimeError, ValueError) as e:
+                    logger.warning(f"[-] Could not load Marian PyTorch model for {model_id}: {e}")
                     return None
 
             model.eval()
 
             if len(self.models) >= self.max_cached_models:
-                evicted_pair, (evicted_model, _) = self.models.popitem(last=False)
+                _evicted_pair, (evicted_model, _) = self.models.popitem(last=False)
                 del evicted_model
 
             self.models[pair] = (model, tokenizer)
@@ -189,8 +192,8 @@ class MarianTranslator(BaseTranslator):
                     latency_ms=round(latency_ms, 2),
                     is_success=True,
                 )
-            except Exception as e:
-                print(f"[-] CTranslate2 translate failed for {src}->{tgt}, trying PyTorch fallback: {e}")
+            except (RuntimeError, ValueError, OSError) as e:
+                logger.warning(f"[-] CTranslate2 translate failed for {src}->{tgt}, trying PyTorch fallback: {e}")
 
         # 2. PyTorch Fallback
         loaded = self._load_model(src, tgt)

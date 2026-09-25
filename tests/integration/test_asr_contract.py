@@ -3,6 +3,7 @@
 import io
 import json
 import urllib.request
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -14,7 +15,7 @@ def is_daemon_running():
         with urllib.request.urlopen(f"{DAEMON_URL}/health", timeout=1.0) as resp:
             data = json.loads(resp.read().decode())
             return data.get("status") == "ready"
-    except Exception:
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
         return False
 
 @pytest.mark.skipif(not is_daemon_running(), reason="ASR daemon not running")
@@ -80,13 +81,14 @@ def test_asr_rejects_malformed_input():
     assert exc_info.value.code == 400
 
 from pathlib import Path
+
 FIXTURE_WAV = Path("/mnt/ssd/hermes/cache/scratch/seal-test-P13/P13mMiIL_2I_full_16k.wav")
 
 @pytest.mark.skipif(not is_daemon_running(), reason="ASR daemon not running")
 @pytest.mark.skipif(not FIXTURE_WAV.exists(), reason="Fixture audio not found")
 def test_asr_real_speech_language_prob():
     # 831.0s to 834.0s is known Indonesian street vendor speech
-    audio, sr = sf.read(str(FIXTURE_WAV), start=int(831.0 * 16000), stop=int(834.0 * 16000), dtype="float32")
+    audio, _sr = sf.read(str(FIXTURE_WAV), start=int(831.0 * 16000), stop=int(834.0 * 16000), dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
 

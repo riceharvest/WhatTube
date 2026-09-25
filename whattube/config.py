@@ -1,8 +1,8 @@
+import os
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
-import os
+
 
 def get_or_create_auth_token() -> str:
     """Retrieve existing auth token from env or ~/.whattube/token, or generate one."""
@@ -17,16 +17,16 @@ def get_or_create_auth_token() -> str:
             tok = token_file.read_text().strip()
             if tok:
                 return tok
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             pass
-            
+
     try:
         token_dir.mkdir(parents=True, exist_ok=True)
         new_tok = secrets.token_hex(16)
         token_file.write_text(new_tok)
         token_file.chmod(0o600)
         return new_tok
-    except Exception:
+    except OSError:
         return "whattube-default-token"
 
 @dataclass

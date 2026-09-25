@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whattube"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sparse real-time foreign chatter detection, transcription, and translation overlay for YouTube."
 readme = "README.md"
 requires-python = ">=3.10"

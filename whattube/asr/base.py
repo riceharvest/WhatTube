@@ -2,7 +2,9 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
 import numpy as np
+
 
 @dataclass
 class ASRResult:
@@ -17,4 +19,3 @@ class ASRBackend(ABC):
     @abstractmethod
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> ASRResult:
         """Transcribe audio chunk and detect primary spoken language."""
-        pass

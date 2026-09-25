@@ -3,10 +3,10 @@
 import json
 import time
 from pathlib import Path
-from typing import Dict, Any, Union
+
 
 class EventAuditLogger:
-    def __init__(self, log_path: Union[str, Path] = "events.jsonl", enabled: bool = False):
+    def __init__(self, log_path: str | Path = "events.jsonl", enabled: bool = False):
         self.log_path = Path(log_path)
         self.enabled = enabled
         if self.enabled:
@@ -41,7 +41,7 @@ class EventAuditLogger:
         translated_text: str,
         is_emitted: bool,
         discard_reason: str,
-        timings: Dict[str, float],
+        timings: dict[str, float],
     ):
         classification = self.classify_event(asr_lang, original_text, not is_emitted, discard_reason)
 
@@ -76,7 +76,7 @@ class EventAuditLogger:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def print_summary(self):
-        print(f"\n=== WHATTUBE EVENT AUDIT SUMMARY ===")
+        print("\n=== WHATTUBE EVENT AUDIT SUMMARY ===")
         print(f"Total GPU Bursts Triggered: {self.total_events}")
         print(f"Emitted Foreign Captions:   {self.emitted_events}")
         print(f"Filtered Clean English:     {self.discarded_english}")

@@ -1,8 +1,8 @@
 """Orchestrator to run WhatTube benchmarks sequentially across Suite 2 (10 additional diverse travel vlogs)."""
 
+import json
 import os
 import sys
-import json
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -103,7 +103,7 @@ def main():
             with open(out_json, "w") as f:
                 json.dump(summary, f, indent=2)
             print(f"[+] Saved {item['name']} result to {out_json}")
-        except Exception as e:
+        except (RuntimeError, ValueError, OSError) as e:
             print(f"[-] Error evaluating {item['name']}: {e}")
 
     summary_file = f"{BENCHMARK_DIR}/suite2_aggregate_summary.json"

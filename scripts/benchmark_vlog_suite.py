@@ -1,35 +1,36 @@
 """Comprehensive verification harness for WhatTube on full-length travel vlogs."""
 
-import os
-import sys
-import time
-import json
-import io
 import argparse
-from typing import List, Dict, Any
-import soundfile as sf
-import urllib.request
+import io
+import json
+import os
+import time
 import urllib.error
+import urllib.request
+from typing import Any
+
+import soundfile as sf
 
 from whattube.config import default_config
-from whattube.vad import EnergyAndSileroVAD
-from whattube.lid import WhisperTinyLID
 from whattube.event_aggregator import DynamicEventAggregator
+from whattube.lid import WhisperTinyLID
 from whattube.translation.marian import MarianTranslator
+from whattube.vad import EnergyAndSileroVAD
+
 
 def run_vlog_benchmark(
     audio_path: str,
-    title_hints: List[str],
+    title_hints: list[str],
     target_lang: str = "en",
     start_sec: float = 0.0,
-    max_duration_sec: float = None,
+    max_duration_sec: float | None = None,
     stride_sec: float = 1.0,
     window_sec: float = 3.0,
-) -> Dict[str, Any]:
-    print(f"\n=======================================================")
+) -> dict[str, Any]:
+    print("\n=======================================================")
     print(f"[*] Starting Vlog Benchmark: {os.path.basename(audio_path)}")
     print(f"[*] Title hints: {title_hints}, Target lang: {target_lang}")
-    print(f"=======================================================")
+    print("=======================================================")
 
     t0_total = time.perf_counter()
     audio, sr = sf.read(audio_path, dtype="float32")
@@ -100,11 +101,6 @@ def run_vlog_benchmark(
     last_emitted_text = ""
     last_emitted_time = 0.0
 
-    south_asian = {"bn", "hi", "ur", "ar"}
-    east_asian = {"ja", "zh", "ko"}
-    southeast_asian = {"id", "ms", "th", "vi", "tl"}
-    european = {"fr", "es", "it", "de", "pt", "nl", "ru", "pl", "uk", "sv", "no", "fi"}
-
     for idx, evt in enumerate(triggered_events):
         s_audio = audio[int(evt.start_sec * sr) : int(evt.end_sec * sr)]
         bio = io.BytesIO()
@@ -118,7 +114,7 @@ def run_vlog_benchmark(
         try:
             with urllib.request.urlopen(req) as resp:
                 asr_res = json.loads(resp.read().decode())
-        except Exception as e:
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
             print(f"[-] ASR request failed for event #{evt.event_id}: {e}")
             continue
 
@@ -206,16 +202,18 @@ def run_vlog_benchmark(
         "discarded_english_or_daemon": discarded_english,
         "discarded_low_confidence": discarded_confidence,
         "discarded_dedup": discarded_dedup,
+        "elapsed_benchmark_sec": round(time.perf_counter() - t0_total, 2),
         "results": results,
     }
 
     print("\n---------------- SUMMARY ----------------")
     print(f"Evaluated Duration: {summary['evaluated_duration_sec']:.1f}s ({summary['evaluated_duration_sec']/60:.1f} min)")
+    print(f"Benchmark Run Time: {summary['elapsed_benchmark_sec']:.1f}s")
     print(f"Triggered Bursts:   {summary['triggered_bursts']}")
     print(f"Emitted Subtitles:  {summary['emitted_subtitles']}")
     print(f"Discarded English:  {summary['discarded_english_or_daemon']}")
     print(f"Discarded Low-Prob: {summary['discarded_low_confidence']}")
-    print(f"-----------------------------------------\n")
+    print("-----------------------------------------\n")
 
     return summary
 

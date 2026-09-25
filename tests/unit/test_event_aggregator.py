@@ -2,6 +2,7 @@
 
 from whattube.event_aggregator import DynamicEventAggregator
 
+
 def test_single_immediate_trigger():
     agg = DynamicEventAggregator(pre_roll_sec=1.0, post_roll_sec=0.5, close_hangover_sec=0.8)
 

@@ -2,14 +2,16 @@
 
 import asyncio
 import json
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import numpy as np
+import pytest
 import websockets
 
 from whattube.config import Config
-from whattube.server import WhatTubeServer, SessionState
 from whattube.event_aggregator import AudioEvent
+from whattube.server import SessionState, WhatTubeServer
+
 
 @pytest.fixture
 def mock_server():
@@ -39,7 +41,7 @@ async def test_reject_binary_pcm_before_init(mock_server):
             
             with pytest.raises(websockets.ConnectionClosed) as exc_info:
                 await ws.recv()
-            assert exc_info.value.code == 4403
+            assert exc_info.value.rcvd.code == 4403
 
 @pytest.mark.asyncio
 async def test_reject_invalid_auth_token(mock_server):
@@ -63,7 +65,7 @@ async def test_reject_invalid_auth_token(mock_server):
             
             with pytest.raises(websockets.ConnectionClosed) as exc_info:
                 await ws.recv()
-            assert exc_info.value.code == 4401
+            assert exc_info.value.rcvd.code == 4401
 
 @pytest.mark.asyncio
 async def test_accept_valid_auth_token(mock_server):
@@ -89,7 +91,7 @@ async def test_accept_valid_auth_token(mock_server):
             
             # Verify session was registered with anchor
             assert len(mock_server.sessions) == 1
-            session = list(mock_server.sessions.values())[0]
+            session = next(iter(mock_server.sessions.values()))
             assert session.target_lang == "es"
             assert session.playback_rate == 1.5
             assert session.anchor_video_time == 42.0

@@ -1,16 +1,17 @@
 """Voice Activity Detection and Energy Gate."""
 
+from pathlib import Path
+
 import numpy as np
 import onnxruntime as ort
-from pathlib import Path
-from typing import Tuple, Union, Optional
+
 
 class EnergyAndSileroVAD:
     """Combines sub-millisecond RMS energy filter with Silero VAD v6."""
 
     def __init__(
         self,
-        model_path: Union[str, Path],
+        model_path: str | Path,
         energy_threshold: float = 0.005,
         vad_threshold: float = 0.35,
     ):
@@ -34,7 +35,7 @@ class EnergyAndSileroVAD:
     def calculate_rms(self, audio: np.ndarray) -> float:
         return float(np.sqrt(np.mean(audio**2)))
 
-    def is_speech(self, audio: np.ndarray) -> Tuple[bool, float, float]:
+    def is_speech(self, audio: np.ndarray) -> tuple[bool, float, float]:
         """
         Check if audio window contains active speech.
         Returns: (is_speech: bool, rms: float, max_vad_prob: float)
@@ -63,7 +64,7 @@ class EnergyAndSileroVAD:
         audio: np.ndarray,
         sample_rate: int = 16000,
         min_subslice_sec: float = 2.5,
-    ) -> Optional[float]:
+    ) -> float | None:
         """Find natural acoustic breath pause dip (sustained valley >= 144ms, avg p < 0.25).
         Enforces that both resulting sub-slices are at least min_subslice_sec long.
         """

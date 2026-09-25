@@ -1,9 +1,12 @@
 """Unit tests for playback rate timeline anchor mapping."""
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from whattube.config import Config
 from whattube.server import SessionState
+
 
 def make_session(initial_vtime=0.0, initial_rate=1.0):
     ws = MagicMock()

@@ -2,11 +2,13 @@
 
 import io
 import time
+
 import httpx
 import numpy as np
 import soundfile as sf
-from typing import Optional
+
 from whattube.asr.base import ASRBackend, ASRResult
+
 
 class ResidentASRClient(ASRBackend):
     def __init__(self, endpoint_url: str = "http://127.0.0.1:8766/transcribe", timeout: float = 10.0):
@@ -19,7 +21,7 @@ class ResidentASRClient(ASRBackend):
         try:
             resp = self.client.get(self.health_url)
             return resp.status_code == 200 and resp.json().get("status") == "ready"
-        except Exception:
+        except (httpx.HTTPError, OSError, ValueError):
             return False
 
     def transcribe(self, audio: np.ndarray, sample_rate: int = 16000) -> ASRResult:
@@ -56,12 +58,12 @@ class ResidentASRClient(ASRBackend):
                 is_discarded=data.get("is_discarded", False),
                 discard_reason=data.get("discard_reason", ""),
             )
-        except Exception as e:
+        except (httpx.HTTPError, OSError, ValueError) as e:
             return ASRResult(
                 text="",
                 language="error",
                 language_prob=0.0,
                 latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
                 is_discarded=True,
-                discard_reason=f"Failed to communicate with ASR daemon: {str(e)}",
+                discard_reason=f"Failed to communicate with ASR daemon: {e!s}",
             )

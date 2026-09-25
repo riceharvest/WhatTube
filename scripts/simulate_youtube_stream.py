@@ -1,18 +1,18 @@
 """Simulate live YouTube tab audio streaming to WhatTube WebSocket server."""
 
+import argparse
 import asyncio
 import json
 import os
 import time
-import argparse
 from pathlib import Path
-from typing import Optional
-import numpy as np
+
 import soundfile as sf
 import websockets
 
-async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://127.0.0.1:8765", token: Optional[str] = None, playback_rate: float = 1.0):
-    print(f"\n=== SIMULATING YOUTUBE AUDIO PLAYBACK ===")
+
+async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, ws_url: str = "ws://127.0.0.1:8765", token: str | None = None, playback_rate: float = 1.0):
+    print("\n=== SIMULATING YOUTUBE AUDIO PLAYBACK ===")
     print(f"Audio file: {wav_path}")
     print(f"Slice: {start_sec:.2f}s -> {start_sec + duration_sec:.2f}s ({duration_sec:.2f}s)")
     print(f"Playback Rate: {playback_rate}x")
@@ -47,14 +47,14 @@ async def simulate_stream(wav_path: str, start_sec: float, duration_sec: float, 
                     if data.get("type") == "caption":
                         arrival_time = time.time()
                         captions_received.append((arrival_time, data))
-                        print(f"\n==========================================")
+                        print("\n==========================================")
                         print(f"⚡ [SUBTITLE RECEIVED] +{arrival_time - t_start_stream:.2f}s relative to start")
                         print(f"   Time Window:  [{data['start']:.2f}s - {data['end']:.2f}s]")
                         print(f"   Language:     {data['language'].upper()}")
                         print(f"   Original:     \"{data['original']}\"")
                         print(f"   Translation:  \"{data['translation']}\"")
                         print(f"   Pipeline RT:  {data.get('latency_ms', 0):.1f}ms")
-                        print(f"==========================================\n")
+                        print("==========================================\n")
             except websockets.ConnectionClosed:
                 pass
 

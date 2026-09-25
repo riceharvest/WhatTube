@@ -3,7 +3,8 @@
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any
+
 
 @dataclass
 class AudioEvent:
@@ -11,7 +12,7 @@ class AudioEvent:
     start_sec: float
     end_sec: float
     duration_sec: float
-    trigger_windows: List[Dict[str, Any]] = field(default_factory=list)
+    trigger_windows: list[dict[str, Any]] = field(default_factory=list)
     opened_at: float = field(default_factory=time.time)
     closed_at: float = 0.0
 
@@ -51,18 +52,18 @@ class DynamicEventAggregator:
         self.is_active = False
         self.event_id_counter = 0
 
-        self.cur_event_id: Optional[int] = None
+        self.cur_event_id: int | None = None
         self.event_start_time: float = 0.0
         self.event_last_active_time: float = 0.0
-        self.cur_trigger_windows: List[Dict[str, Any]] = []
+        self.cur_trigger_windows: list[dict[str, Any]] = []
 
     def update(
         self,
         t_start: float,
         t_end: float,
         is_speech: bool,
-        lid_result: Optional[Dict[str, Any]],
-    ) -> Optional[AudioEvent]:
+        lid_result: dict[str, Any] | None,
+    ) -> AudioEvent | None:
         """
         Process a new sliding window (typically 3s length, 1s stride).
         Returns an AudioEvent when an event closes or reaches max burst duration.
@@ -134,13 +135,13 @@ class DynamicEventAggregator:
 
         return None
 
-    def check_hangover_timeout(self, cur_time: float) -> Optional[AudioEvent]:
+    def check_hangover_timeout(self, cur_time: float) -> AudioEvent | None:
         """Check if active event has timed out due to stream pause or inactivity."""
         if self.is_active and (cur_time - self.event_last_active_time) >= self.close_hangover_sec:
             return self._finalize_event(self.event_last_active_time + self.post_roll_sec)
         return None
 
-    def _finalize_event(self, end_time: float, allow_short: bool = False) -> Optional[AudioEvent]:
+    def _finalize_event(self, end_time: float, allow_short: bool = False) -> AudioEvent | None:
         start = self.event_start_time
         min_sec = 1.2 if allow_short else self.min_event_sec
         end = max(end_time, start + min_sec)
@@ -161,7 +162,7 @@ class DynamicEventAggregator:
         self.cur_trigger_windows = []
         return event
 
-    def flush(self, current_time: float) -> Optional[AudioEvent]:
+    def flush(self, current_time: float) -> AudioEvent | None:
         """Force finalize any pending active event."""
         if self.is_active:
             return self._finalize_event(current_time)

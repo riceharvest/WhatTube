@@ -1,10 +1,11 @@
 """Spoken Language Identification (LID) using quantized Whisper Tiny ONNX."""
 
 import time
+from pathlib import Path
+from typing import Any
+
 import numpy as np
 import onnxruntime as ort
-from pathlib import Path
-from typing import Dict, Any, Union
 from transformers import WhisperFeatureExtractor
 
 LANG_TOKENS = [
@@ -40,8 +41,8 @@ class WhisperTinyLID:
 
     def __init__(
         self,
-        encoder_path: Union[str, Path],
-        decoder_path: Union[str, Path],
+        encoder_path: str | Path,
+        decoder_path: str | Path,
         lid_suspicious: float = 0.55,
         lid_immediate: float = 0.20,
         num_threads: int = 4,
@@ -64,7 +65,7 @@ class WhisperTinyLID:
         self.v_cache = np.zeros((4, 1, 448, 384), dtype=np.float32)
         self.offset = np.array([0], dtype=np.int64)
 
-    def predict(self, audio: np.ndarray, sample_rate: int = 16000) -> Dict[str, Any]:
+    def predict(self, audio: np.ndarray, sample_rate: int = 16000) -> dict[str, Any]:
         """
         Predict language probabilities from audio chunk (typically 3s).
         Returns classification metrics and suspicion status.

@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
+
 @dataclass
 class TranslationResult:
     original_text: str
@@ -22,4 +23,3 @@ class BaseTranslator(ABC):
         target_lang: str = "en",
     ) -> TranslationResult:
         """Translate text from source_lang to target_lang."""
-        pass

@@ -5,18 +5,20 @@ import json
 import logging
 import time
 import uuid
-from typing import Dict, Set, Optional
+from typing import Any
+
 import numpy as np
 import websockets
+from websockets.server import ServerConnection
 
-from whattube.config import Config, default_config
-from whattube.audio_buffer import AudioRingBuffer
-from whattube.vad import EnergyAndSileroVAD
-from whattube.lid import WhisperTinyLID
-from whattube.event_aggregator import DynamicEventAggregator
 from whattube.asr.client import ResidentASRClient
-from whattube.translation.marian import MarianTranslator
+from whattube.audio_buffer import AudioRingBuffer
+from whattube.config import Config, default_config
+from whattube.event_aggregator import DynamicEventAggregator
+from whattube.lid import WhisperTinyLID
 from whattube.logger import EventAuditLogger
+from whattube.translation.marian import MarianTranslator
+from whattube.vad import EnergyAndSileroVAD
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("WhatTube")
@@ -43,7 +45,7 @@ TITLE_KEYWORD_LANG_MAP = {
     "greece": "el", "greek": "el", "athens": "el", "santorini": "el",
 }
 
-def extract_language_hints_from_title(title: str) -> Set[str]:
+def extract_language_hints_from_title(title: str) -> set[str]:
     hints = set()
     if not title:
         return hints
@@ -62,7 +64,7 @@ class SessionState:
     def __init__(
         self,
         session_id: str,
-        websocket: websockets.WebSocketServerProtocol,
+        websocket: ServerConnection,
         config: Config,
         target_lang: str = "en",
         initial_video_time: float = 0.0,
@@ -116,7 +118,7 @@ class SessionState:
         self.last_emitted_time = 0.0
         self.last_emitted_lang = ""
         self.is_closed = False
-        self.active_tasks: Set[asyncio.Task] = set()
+        self.active_tasks: set[asyncio.Task] = set()
 
     def update_video_title(self, title: str):
         """Update video title and refresh language domain priors."""
@@ -125,7 +127,7 @@ class SessionState:
             self.title_hints = extract_language_hints_from_title(title)
             logger.info(f"[*] [Session {self.session_id[:6]}] Video title updated: '{title}' -> Language hints: {self.title_hints}")
 
-    def set_anchor(self, audio_time: float, video_time: float, playback_rate: Optional[float] = None):
+    def set_anchor(self, audio_time: float, video_time: float, playback_rate: float | None = None):
         """Re-anchors the audio-to-video timeline mapping."""
         self.anchor_audio_time = audio_time
         self.anchor_video_time = video_time
@@ -136,7 +138,7 @@ class SessionState:
         """Converts audio buffer timestamp to exact video player timeline position."""
         return self.anchor_video_time + (audio_sec - self.anchor_audio_time) * self.playback_rate
 
-    def increment_epoch(self, new_video_time: Optional[float] = None, playback_rate: Optional[float] = None):
+    def increment_epoch(self, new_video_time: float | None = None, playback_rate: float | None = None):
         """Invalidates all in-flight ASR/translation tasks, resets temporal buffer and re-anchors."""
         self.epoch += 1
         self.ring_buffer.reset()
@@ -158,8 +160,8 @@ class SessionState:
 class WhatTubeServer:
     def __init__(self, config: Config = default_config):
         self.config = config
-        self.sessions: Dict[str, SessionState] = {}
-        self.ws_to_session: Dict[websockets.WebSocketServerProtocol, str] = {}
+        self.sessions: dict[str, SessionState] = {}
+        self.ws_to_session: dict[Any, str] = {}
 
         logger.info(f"[*] Initializing shared ASR Client -> {config.asr_endpoint}...")
         self.asr_client = ResidentASRClient(endpoint_url=config.asr_endpoint)
@@ -197,7 +199,7 @@ class WhatTubeServer:
 
         # 1. VAD & Energy check (<2ms)
         t_vad_0 = time.perf_counter()
-        is_speech, rms, vad_prob = session.vad.is_speech(audio_window)
+        is_speech, _rms, _vad_prob = session.vad.is_speech(audio_window)
         t_vad = (time.perf_counter() - t_vad_0) * 1000.0
 
         lid_res = None
@@ -395,7 +397,7 @@ class WhatTubeServer:
             # ROUTE PRIVATELY TO THIS SESSION'S TAB ONLY (NO GLOBAL BROADCAST)
             try:
                 await session.websocket.send(json.dumps(caption_payload))
-            except Exception as e:
+            except (websockets.ConnectionClosed, OSError, RuntimeError) as e:
                 logger.warning(f"[-] Failed to deliver caption to session {session.session_id[:6]}: {e}")
 
             self.audit_logger.log_event(
@@ -455,8 +457,8 @@ class WhatTubeServer:
                 await websocket.close(code=4403, reason="Forbidden origin")
                 return
 
-        session: Optional[SessionState] = None
-        session_id: Optional[str] = None
+        session: SessionState | None = None
+        session_id: str | None = None
 
         try:
             # 2. STRICT AUTH & INIT PHASE: Only an 'init' message with valid auth token is accepted
@@ -474,7 +476,7 @@ class WhatTubeServer:
 
             try:
                 init_data = json.loads(first_msg)
-            except Exception:
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 await websocket.close(code=4400, reason="Invalid JSON handshake")
                 return
 
@@ -485,12 +487,11 @@ class WhatTubeServer:
 
             # Validate auth token
             token = init_data.get("token")
-            if self.config.auth_token:
-                if not token or token != self.config.auth_token:
-                    logger.warning("[-] Client failed auth token verification")
-                    await websocket.send(json.dumps({"type": "error", "error": "Unauthorized"}))
-                    await websocket.close(code=4401, reason="Unauthorized")
-                    return
+            if self.config.auth_token and (not token or token != self.config.auth_token):
+                logger.warning("[-] Client failed auth token verification")
+                await websocket.send(json.dumps({"type": "error", "error": "Unauthorized"}))
+                await websocket.close(code=4401, reason="Unauthorized")
+                return
 
             # 3. Authenticated: Construct SessionState now (expensive VAD/LID only created once auth passes)
             session_id = str(uuid.uuid4())
@@ -592,7 +593,7 @@ class WhatTubeServer:
                 max_size=10_000_000,
             ):
                 while self.running:
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(0.5)
         finally:
             ticker_task.cancel()
 

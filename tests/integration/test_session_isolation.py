@@ -1,11 +1,11 @@
 """Tests for multi-client SessionState isolation and epoch cancellation."""
 
-import asyncio
-import json
 import numpy as np
 import pytest
+
 from whattube.config import default_config
 from whattube.server import SessionState, WhatTubeServer
+
 
 class MockWebSocket:
     def __init__(self):

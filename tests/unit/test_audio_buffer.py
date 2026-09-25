@@ -1,8 +1,9 @@
 """Unit tests for AudioRingBuffer."""
 
 import numpy as np
-import pytest
+
 from whattube.audio_buffer import AudioRingBuffer
+
 
 def test_audio_ring_buffer_basic_append_and_slice():
     buf = AudioRingBuffer(sample_rate=16000, capacity_sec=10.0)

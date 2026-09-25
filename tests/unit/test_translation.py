@@ -1,7 +1,7 @@
 """Tests for MarianTranslator LRU cache, routing, and fallbacks."""
 
-import pytest
 from whattube.translation.marian import MarianTranslator
+
 
 def test_translation_identity_fastpath():
     translator = MarianTranslator(use_ct2=False)
