@@ -233,14 +233,19 @@ def evaluate_single_mixture(meta, vad, lid, translator):
                     continue
 
             # Translate to English
-            trans_res = translator.translate(text, source_lang=lang, target_lang="en")
+            try:
+                trans_res = translator.translate(text, source_lang=lang, target_lang="en")
+                translated_text = trans_res.translated_text
+            except Exception:
+                translated_text = text
+
             emitted_captions.append({
                 "start_sec": sub_start,
                 "end_sec": sub_end,
                 "lang": lang,
                 "prob": prob,
                 "original_text": text,
-                "translated_text": trans_res.translated_text,
+                "translated_text": translated_text,
             })
 
     # Evaluate Metrics
@@ -295,15 +300,34 @@ def main():
     translator = MarianTranslator(device="cpu", use_ct2=True)
     print("[+] Models ready.")
 
+    checkpoint_file = os.path.join(OUTPUT_DIR, "scientific_benchmark_checkpoint.json")
+    completed_results = {}
+    if os.path.exists(checkpoint_file):
+        try:
+            with open(checkpoint_file) as f:
+                saved = json.load(f)
+                completed_results = {r["mix_id"]: r for r in saved}
+            print(f"[+] Loaded {len(completed_results)} previously evaluated mixtures from checkpoint.")
+        except Exception as e:
+            print(f"[-] Could not load checkpoint: {e}")
+
     t0 = time.time()
     results = []
 
     for idx, mix in enumerate(mixtures, 1):
-        res = evaluate_single_mixture(mix, vad, lid, translator)
-        results.append(res)
-        if idx % 50 == 0 or idx == len(mixtures):
+        mix_id = mix["mix_id"]
+        if mix_id in completed_results:
+            results.append(completed_results[mix_id])
+        else:
+            res = evaluate_single_mixture(mix, vad, lid, translator)
+            results.append(res)
+            completed_results[mix_id] = res
+
+        if idx % 25 == 0 or idx == len(mixtures):
             elapsed = time.time() - t0
-            print(f"  [{idx}/{len(mixtures)}] Evaluated in {elapsed:.1f}s ({idx/elapsed:.1f} mixes/sec)...")
+            print(f"  [{idx}/{len(mixtures)}] Evaluated in {elapsed:.1f}s ({idx/max(elapsed, 0.001):.1f} mixes/sec)...")
+            with open(checkpoint_file, "w") as f:
+                json.dump(list(completed_results.values()), f)
 
     # Aggregate Statistics
     total_eval = len(results)

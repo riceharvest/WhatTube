@@ -27,6 +27,9 @@ LANGUAGE_MODEL_ALIASES = {
     "cantonese": "zh",
     "ms": "id",       # Malay maps to Indonesian
     "malay": "id",
+    "jw": "id",       # Javanese maps to Indonesian
+    "jv": "id",       # Javanese maps to Indonesian
+    "su": "id",       # Sundanese maps to Indonesian
     "el": "grk",      # Greek maps to Helsinki-NLP Greek-to-English (opus-mt-grk-en)
     "greek": "grk",
 }
@@ -85,10 +88,10 @@ class MarianTranslator(BaseTranslator):
 
             try:
                 tokenizer = MarianTokenizer.from_pretrained(model_id, local_files_only=True)
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 try:
                     tokenizer = MarianTokenizer.from_pretrained(model_id)
-                except (OSError, RuntimeError, ValueError) as e:
+                except Exception as e:
                     logger.warning(f"[-] Could not load Marian tokenizer for {model_id}: {e}")
                     return None
 
@@ -100,7 +103,7 @@ class MarianTranslator(BaseTranslator):
                     converter = TransformersConverter(model_id, low_cpu_mem_usage=True)
                     converter.convert(ct2_dir, quantization="int8", force=True)
                     logger.info(f"[+] Converted {model_id} to CT2 INT8 successfully.")
-                except (OSError, RuntimeError, ValueError) as e:
+                except Exception as e:
                     logger.error(f"[-] CT2 conversion failed for {model_id}: {e}")
                     return None
 
@@ -120,7 +123,7 @@ class MarianTranslator(BaseTranslator):
 
                 self.ct2_models[pair] = (ct2_translator, tokenizer)
                 return ct2_translator, tokenizer
-            except (RuntimeError, ValueError, OSError) as e:
+            except Exception as e:
                 logger.warning(f"[-] Failed to instantiate CTranslate2 Translator for {pair}: {e}")
                 return None
 
@@ -136,11 +139,11 @@ class MarianTranslator(BaseTranslator):
             try:
                 tokenizer = MarianTokenizer.from_pretrained(model_id, local_files_only=True)
                 model = MarianMTModel.from_pretrained(model_id, local_files_only=True).to(self.device)
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 try:
                     tokenizer = MarianTokenizer.from_pretrained(model_id)
                     model = MarianMTModel.from_pretrained(model_id).to(self.device)
-                except (OSError, RuntimeError, ValueError) as e:
+                except Exception as e:
                     logger.warning(f"[-] Could not load Marian PyTorch model for {model_id}: {e}")
                     return None
 
@@ -192,7 +195,7 @@ class MarianTranslator(BaseTranslator):
                     latency_ms=round(latency_ms, 2),
                     is_success=True,
                 )
-            except (RuntimeError, ValueError, OSError) as e:
+            except Exception as e:
                 logger.warning(f"[-] CTranslate2 translate failed for {src}->{tgt}, trying PyTorch fallback: {e}")
 
         # 2. PyTorch Fallback
@@ -209,17 +212,29 @@ class MarianTranslator(BaseTranslator):
             )
 
         model, tokenizer = loaded
-        with torch.no_grad():
-            inputs = tokenizer([clean_text], return_tensors="pt", padding=True, truncation=True).to(self.device)
-            gen_tokens = model.generate(**inputs, max_length=128)
-            translated = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)[0].strip()
+        try:
+            with torch.no_grad():
+                inputs = tokenizer([clean_text], return_tensors="pt", padding=True, truncation=True).to(self.device)
+                gen_tokens = model.generate(**inputs, max_length=128)
+                translated = tokenizer.batch_decode(gen_tokens, skip_special_tokens=True)[0].strip()
 
-        latency_ms = (time.perf_counter() - t0) * 1000.0
-        return TranslationResult(
-            original_text=clean_text,
-            translated_text=translated,
-            source_lang=source_lang,
-            target_lang=target_lang,
-            latency_ms=round(latency_ms, 2),
-            is_success=True,
-        )
+            latency_ms = (time.perf_counter() - t0) * 1000.0
+            return TranslationResult(
+                original_text=clean_text,
+                translated_text=translated,
+                source_lang=source_lang,
+                target_lang=target_lang,
+                latency_ms=round(latency_ms, 2),
+                is_success=True,
+            )
+        except Exception as e:
+            logger.error(f"[-] PyTorch Marian generation failed for {src}->{tgt}: {e}")
+            return TranslationResult(
+                original_text=clean_text,
+                translated_text=f"[{source_lang.upper()}]: {clean_text}",
+                source_lang=source_lang,
+                target_lang=target_lang,
+                latency_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+                is_success=False,
+                error_message=str(e),
+            )
