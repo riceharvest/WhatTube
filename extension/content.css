@@ -20,6 +20,29 @@
   bottom: 45px;
 }
 
+/* Fullscreen mode scaling and positioning */
+.ytp-fullscreen .whattube-container {
+  bottom: 105px;
+  max-width: 860px;
+}
+
+.ytp-fullscreen.ytp-autohide .whattube-container {
+  bottom: 60px;
+}
+
+.ytp-fullscreen .whattube-translation {
+  font-size: 25px;
+}
+
+.ytp-fullscreen .whattube-original {
+  font-size: 17px;
+}
+
+.ytp-fullscreen .whattube-badge {
+  font-size: 13px;
+  padding: 2px 8px;
+}
+
 .whattube-card {
   pointer-events: auto;
   background: rgba(18, 18, 22, 0.88);

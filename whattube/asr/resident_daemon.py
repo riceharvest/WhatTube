@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from transformers import WhisperProcessor, WhisperForConditionalGeneration
 
-app = FastAPI(title="WhatTube Resident ASR Daemon")
+from contextlib import asynccontextmanager
 
 # Global state
 processor = None
@@ -35,8 +35,8 @@ def get_device() -> str:
         return "mps"
     return "cpu"
 
-@app.on_event("startup")
-def load_model():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global processor, model, device, dtype, lang_tokens_list, lang_token_ids
     device = get_device()
     print(f"[*] Initializing WhatTube ASR Daemon on target device: {device}")
@@ -57,10 +57,14 @@ def load_model():
     dtype = torch.float16 if device in ["xpu", "cuda"] else torch.float32
     model = WhisperForConditionalGeneration.from_pretrained(
         model_id,
-        torch_dtype=dtype,
+        dtype=dtype,
         low_cpu_mem_usage=True,
     ).to(device)
     model.eval()
+
+    if hasattr(model, "generation_config") and model.generation_config:
+        model.generation_config.forced_decoder_ids = None
+        model.generation_config.max_length = None
 
     # Warmup dummy pass
     dummy_audio = np.zeros(16000 * 3, dtype=np.float32)
@@ -69,6 +73,9 @@ def load_model():
         _ = model.generate(inputs, max_new_tokens=8)
 
     print(f"[+] Model resident in {device.upper()} memory in {time.time() - t0:.2f} s")
+    yield
+
+app = FastAPI(title="WhatTube Resident ASR Daemon", lifespan=lifespan)
 
 @app.get("/health")
 def health():
