@@ -63,7 +63,7 @@ class EnergyAndSileroVAD:
         self,
         audio: np.ndarray,
         sample_rate: int = 16000,
-        min_subslice_sec: float = 2.5,
+        min_subslice_sec: float = 1.0,
     ) -> float | None:
         """Find natural acoustic breath pause dip (sustained valley >= 144ms, avg p < 0.25).
         Enforces that both resulting sub-slices are at least min_subslice_sec long.

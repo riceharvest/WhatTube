@@ -28,13 +28,13 @@ class DynamicEventAggregator:
 
     def __init__(
         self,
-        pre_roll_sec: float = 0.5,
-        post_roll_sec: float = 0.5,
-        close_hangover_sec: float = 0.8,
-        min_event_sec: float = 3.0,
-        max_event_sec: float = 8.0,
+        pre_roll_sec: float = 0.2,
+        post_roll_sec: float = 0.3,
+        close_hangover_sec: float = 0.6,
+        min_event_sec: float = 1.2,
+        max_event_sec: float = 6.0,
         lid_suspicious: float = 0.55,
-        lid_immediate: float = 0.20,
+        lid_immediate: float = 0.25,
         lid_english_safe: float = 0.75,
         consecutive_suspicious_req: int = 2,
     ):
@@ -143,7 +143,7 @@ class DynamicEventAggregator:
 
     def _finalize_event(self, end_time: float, allow_short: bool = False) -> AudioEvent | None:
         start = self.event_start_time
-        min_sec = 1.2 if allow_short else self.min_event_sec
+        min_sec = 0.8 if allow_short else self.min_event_sec
         end = max(end_time, start + min_sec)
         duration = end - start
 

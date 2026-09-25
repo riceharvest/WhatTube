@@ -133,34 +133,36 @@ async def transcribe(request: Request):
         inputs = processor(audio, sampling_rate=16000, return_tensors="pt").input_features.to(device, dtype=dtype)
 
         with torch.no_grad():
+            enc_out = model.model.encoder(inputs)
+            gen_cfg = model.generation_config
+            dec_ids = torch.tensor([[gen_cfg.decoder_start_token_id]], device=device)
+            dec_out = model.model.decoder(input_ids=dec_ids, encoder_hidden_states=enc_out[0])
+            first_logits = model.proj_out(dec_out[0])[0, -1]
+
+            if hasattr(gen_cfg, "lang_to_id") and gen_cfg.lang_to_id:
+                lang_ids = list(gen_cfg.lang_to_id.values())
+                lang_names = list(gen_cfg.lang_to_id.keys())
+            else:
+                lang_ids = lang_token_ids
+                lang_names = lang_tokens_list
+
+            lang_logits = first_logits[lang_ids]
+            lang_probs = torch.softmax(lang_logits.float(), dim=-1)
+
+            top_idx = torch.argmax(lang_probs).item()
+            detected_tag = lang_names[top_idx]
+            detected_lang = detected_tag.replace("<|", "").replace("|>", "").strip()
+            language_prob = round(float(lang_probs[top_idx].item()), 4)
+
             gen_out = model.generate(
-                inputs,
+                encoder_outputs=enc_out,
                 max_new_tokens=64,
                 repetition_penalty=1.05,
-                return_dict_in_generate=True,
-                output_scores=True,
             )
 
-        seq = gen_out.sequences[0]
+        seq = gen_out[0]
         t1 = time.perf_counter()
         latency_ms = (t1 - t0) * 1000.0
-
-        # Extract language token and probability
-        lang_token_id = int(seq[1].item()) if len(seq) > 1 else None
-        raw_lang = processor.tokenizer.decode([lang_token_id]).strip() if lang_token_id else ""
-        detected_lang = raw_lang.replace("<|", "").replace("|>", "").strip()
-
-        language_prob = 1.0
-        if hasattr(gen_out, "scores") and len(gen_out.scores) > 0 and lang_token_ids:
-            try:
-                lang_logits = gen_out.scores[0][0, lang_token_ids]
-                lang_probs = torch.softmax(lang_logits.float(), dim=-1)
-                token_tag = f"<|{detected_lang}|>"
-                if token_tag in lang_tokens_list:
-                    idx = lang_tokens_list.index(token_tag)
-                    language_prob = round(float(lang_probs[idx].item()), 4)
-            except (IndexError, KeyError, RuntimeError, ValueError):
-                language_prob = 1.0
 
         # Extract text (skip special tokens)
         decoded_text = processor.tokenizer.decode(seq, skip_special_tokens=True).strip()
@@ -182,10 +184,10 @@ async def transcribe(request: Request):
             "laughter", "chatter", "silence", "реклама", "advertising",
         }
 
-        if detected_lang.lower() == "en":
+        if detected_lang.lower() == "en" and len(clean_lower.split()) >= 5:
             is_discarded = True
-            discard_reason = "Turbo ASR classified language as English"
-        elif language_prob < 0.15:
+            discard_reason = "Turbo ASR classified language as English monologue (>=5 words)"
+        elif language_prob < 0.15 and detected_lang.lower() != "en":
             is_discarded = True
             discard_reason = f"Low language confidence ({language_prob:.2f} < 0.15) in background noise"
         elif (

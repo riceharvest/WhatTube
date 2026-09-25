@@ -242,9 +242,9 @@ class WhatTubeServer:
 
         # Acoustic breath-pause splitting: decouples preceding English from foreign chatter
         sub_slices = []
-        if event.duration_sec >= 5.0:
+        if event.duration_sec >= 2.5:
             split_sec = session.vad.find_split_point(event_audio, sample_rate=self.config.sample_rate)
-            if split_sec is not None:
+            if split_sec is not None and isinstance(split_sec, (int, float)):
                 split_idx = int(split_sec * self.config.sample_rate)
                 sub_slices.append((event.start_sec, event.start_sec + split_sec, event_audio[:split_idx]))
                 sub_slices.append((event.start_sec + split_sec, event.end_sec, event_audio[split_idx:]))
@@ -276,11 +276,70 @@ class WhatTubeServer:
                 logger.info(f"[*] [Session {session.session_id[:6]}] Stale ASR result discarded (epoch changed).")
                 return
 
-            # Turbo Language Gate Filter
-            if asr_res.is_discarded or asr_res.language.lower() == "en":
+            is_english = (asr_res.language.lower() == "en")
+            words = asr_res.text.strip().split()
+            word_count = len(words)
+
+            # Check minimum Stage 1 English probability across trigger windows
+            min_stage1_p_en = 1.0
+            if event.trigger_windows:
+                stage1_p_ens = [
+                    w["lid"]["p_en"]
+                    for w in event.trigger_windows
+                    if w.get("is_speech") and w.get("lid") and "p_en" in w["lid"]
+                ]
+                if stage1_p_ens:
+                    min_stage1_p_en = min(stage1_p_ens)
+
+            is_english_monologue = is_english and (word_count >= 5 or min_stage1_p_en >= 0.35)
+
+            # Sub-slice fallback: If macro slice evaluated to English monologue, check if any trigger
+            # window inside this slice had non-English chatter (p_en < 0.35).
+            # If so, isolate the non-English sub-burst to bypass host monologue dominance.
+            if (asr_res.is_discarded or is_english_monologue) and event.trigger_windows:
+                susp_spans = [
+                    (w["t_start"], w["t_end"])
+                    for w in event.trigger_windows
+                    if w.get("is_speech") and w.get("lid") and w["lid"].get("p_en", 1.0) < 0.35
+                    and (sub_start <= w.get("t_start", 0.0) < sub_end)
+                ]
+                if susp_spans:
+                    f_start = max(sub_start, min(s[0] for s in susp_spans) - 0.1)
+                    f_end = min(sub_end, max(s[1] for s in susp_spans) + 0.2)
+                    if f_end - f_start < 1.0:
+                        f_end = min(sub_end, f_start + 1.0)
+
+                    # Only retry if sub-burst is substantially tighter than the current slice
+                    if (f_end - f_start) <= 0.75 * (sub_end - sub_start) and (f_end - f_start) >= 0.8:
+                        f_audio = session.ring_buffer.get_slice(f_start, f_end)
+                        if f_audio is not None:
+                            async with self.asr_semaphore:
+                                if session.epoch == event_epoch and not session.is_closed:
+                                    fallback_asr = await loop.run_in_executor(
+                                        None, self.asr_client.transcribe, f_audio, self.config.sample_rate
+                                    )
+                                    fb_words = fallback_asr.text.strip().split()
+                                    fb_is_en = (fallback_asr.language.lower() == "en")
+                                    fb_is_monologue = fb_is_en and (len(fb_words) >= 5 or min_stage1_p_en >= 0.35)
+                                    if not fallback_asr.is_discarded and not fb_is_monologue:
+                                        logger.info(
+                                            f"[*] [Session {session.session_id[:6]}] Sub-slice fallback SUCCESS: "
+                                            f"isolated [{f_start:.2f}s - {f_end:.2f}s] from [{sub_start:.2f}s - {sub_end:.2f}s] -> "
+                                            f"lang={fallback_asr.language}, text='{fallback_asr.text}'"
+                                        )
+                                        sub_start, sub_end, sub_audio = f_start, f_end, f_audio
+                                        asr_res = fallback_asr
+                                        is_english = (asr_res.language.lower() == "en")
+                                        words = asr_res.text.strip().split()
+                                        word_count = len(words)
+                                        is_english_monologue = False
+
+            # Turbo Language Gate Filter: Discard daemon discards or English monologues
+            if asr_res.is_discarded or is_english_monologue:
+                discard_reason = asr_res.discard_reason or "Turbo ASR classified language as English monologue"
                 logger.info(
                     f"[x] [Session {session.session_id[:6]}] Sub-Event [{sub_start:.2f}s - {sub_end:.2f}s] DISCARDED: "
-                    f"{asr_res.discard_reason or 'Classified as English'} (lang={asr_res.language}, text='{asr_res.text}')"
+                    f"{discard_reason} (lang={asr_res.language}, text='{asr_res.text}')"
                 )
                 self.audit_logger.log_event(
                     event_id=event.event_id,
@@ -292,42 +351,42 @@ class WhatTubeServer:
                     original_text=asr_res.text,
                     translated_text="",
                     is_emitted=False,
-                    discard_reason=asr_res.discard_reason or "Classified as English",
+                    discard_reason=discard_reason,
                     timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
                 )
                 continue
 
             # Bayesian Confidence & Out-of-Domain Filter:
             # - In-domain/local speech (matching title hints): threshold relaxed to p >= 0.15 to capture noisy street chatter
-            # - Out-of-domain speech with title hints: threshold tightened to p >= 0.55 to reject acoustic hallucinations
+            # - Out-of-domain speech with title hints: threshold set to p >= 0.40 (captures phonetic cross-lingua like Indonesian->Spanish)
             # - No title hints available: default p >= 0.25
+            # - Non-monologue English chatter (word_count <= 4 and min_stage1_p_en < 0.35): accepted as local foreign chatter
             lang_code = asr_res.language.lower()
             lang_prob = getattr(asr_res, "language_prob", 1.0)
             if isinstance(lang_prob, (int, float)):
-                # Only languages directly matching title hints get the relaxed local prior (p >= 0.15).
-                # All other languages in foreign destination require high confidence (p >= 0.55).
-                is_local = bool(session.title_hints and lang_code in session.title_hints)
-                min_prob = 0.15 if is_local else (0.55 if session.title_hints else 0.25)
-                if lang_prob < min_prob:
-                    discard_msg = (
-                        f"Confidence gate: low-prob {lang_code.upper()} ({lang_prob:.2f} < {min_prob:.2f}) "
-                        f"{'inconsistent with' if not is_local and session.title_hints else 'below confidence floor for'} title hints {session.title_hints}"
-                    )
-                    logger.info(f"[*] [Session {session.session_id[:6]}] DISCARDED: {discard_msg}")
-                    self.audit_logger.log_event(
-                        event_id=event.event_id,
-                        start_sec=sub_start,
-                        end_sec=sub_end,
-                        duration_sec=sub_end - sub_start,
-                        trigger_reason=trigger_reason,
-                        asr_lang=asr_res.language,
-                        original_text=asr_res.text,
-                        translated_text="",
-                        is_emitted=False,
-                        discard_reason=discard_msg,
-                        timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
-                    )
-                    continue
+                if lang_code != "en":
+                    is_local = bool(session.title_hints and lang_code in session.title_hints)
+                    min_prob = 0.15 if is_local else (0.40 if session.title_hints else 0.25)
+                    if lang_prob < min_prob:
+                        discard_msg = (
+                            f"Confidence gate: low-prob {lang_code.upper()} ({lang_prob:.2f} < {min_prob:.2f}) "
+                            f"{'inconsistent with' if not is_local and session.title_hints else 'below confidence floor for'} title hints {session.title_hints}"
+                        )
+                        logger.info(f"[*] [Session {session.session_id[:6]}] DISCARDED: {discard_msg}")
+                        self.audit_logger.log_event(
+                            event_id=event.event_id,
+                            start_sec=sub_start,
+                            end_sec=sub_end,
+                            duration_sec=sub_end - sub_start,
+                            trigger_reason=trigger_reason,
+                            asr_lang=asr_res.language,
+                            original_text=asr_res.text,
+                            translated_text="",
+                            is_emitted=False,
+                            discard_reason=discard_msg,
+                            timings={"stage1_ms": stage1_latency_ms, "asr_ms": t_asr, "total_ms": stage1_latency_ms + t_asr},
+                        )
+                        continue
 
             # Multi-window consensus & deduplication filter
             clean_curr = asr_res.text.strip().lower()
