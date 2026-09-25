@@ -219,3 +219,52 @@ async def test_out_of_domain_hallucination_filtered(mock_server):
 
     # Discarded: no caption sent to client
     ws.send.assert_not_called()
+
+@pytest.mark.asyncio
+async def test_local_language_bayesian_prior_accepted(mock_server):
+    """Verify that a noisy street vendor in destination (e.g. Spanish in Mexico at prob=0.20) is accepted."""
+    ws = AsyncMock()
+    session = SessionState("sess-cdmx", ws, mock_server.config, video_title="Mexico City Street Taco Tour")
+    mock_server.sessions["sess-cdmx"] = session
+
+    event = AudioEvent(event_id=2, start_sec=1.0, end_sec=4.0, duration_sec=3.0)
+
+    # Spanish in Mexico at prob=0.20 (below static 0.25, but >= 0.15 local gate)
+    mock_asr = MagicMock()
+    mock_asr.language = "es"
+    mock_asr.language_prob = 0.20
+    mock_asr.text = "Tacos de canasta joven"
+    mock_asr.is_discarded = False
+    mock_asr.discard_reason = ""
+    mock_server.asr_client.transcribe = MagicMock(return_value=mock_asr)
+
+    mock_trans = MagicMock()
+    mock_trans.translated_text = "Basket tacos young man"
+    mock_server.translator.translate = MagicMock(return_value=mock_trans)
+
+    dummy_audio = np.zeros(16000 * 5, dtype=np.float32)
+    session.ring_buffer.append(dummy_audio)
+
+    await mock_server.handle_event_burst(session, event, event_epoch=session.epoch, stage1_latency_ms=5.0)
+
+    # Must be emitted!
+    assert ws.send.call_count == 1
+    payload = json.loads(ws.send.call_args[0][0])
+    assert payload["type"] == "caption"
+    assert payload["translation"] == "Basket tacos young man"
+
+def test_session_state_seek_and_title_update(mock_server):
+    """Verify that seek updates anchor, epoch, and video title hints."""
+    ws = MagicMock()
+    session = SessionState("sess-test", ws, mock_server.config, video_title="Old Title")
+    assert session.epoch == 0
+    assert "ja" not in session.title_hints
+
+    session.update_video_title("Tokyo Japan Street Food")
+    assert "ja" in session.title_hints
+
+    session.increment_epoch(new_video_time=42.0, playback_rate=1.5)
+    assert session.epoch == 1
+    assert session.anchor_video_time == 42.0
+    assert session.playback_rate == 1.5
+

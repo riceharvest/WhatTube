@@ -540,7 +540,10 @@ class WhatTubeServer:
                         elif msg_type == "seek":
                             vtime = float(data.get("video_time", 0.0))
                             prate = float(data.get("playback_rate", session.playback_rate))
-                            logger.info(f"[*] [Session {session_id[:8]}] Seek to {vtime:.2f}s (new epoch {session.epoch + 1})")
+                            vtitle = data.get("video_title")
+                            if vtitle:
+                                session.update_video_title(vtitle)
+                            logger.info(f"[*] [Session {session_id[:8]}] Seek/navigate to {vtime:.2f}s (new epoch {session.epoch + 1}, title='{vtitle}')")
                             session.increment_epoch(new_video_time=vtime, playback_rate=prate)
 
                         elif msg_type == "ratechange":

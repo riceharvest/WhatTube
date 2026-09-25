@@ -158,13 +158,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+let currentAttachedVideo = null;
+
 // Watch video events to synchronize timestamps and lifecycle
 function initVideoListeners() {
   const video = document.querySelector("video");
   if (!video) return;
 
-  // Send immediate sync on start
+  // Send immediate sync on start or re-bind
   sendVideoSync(false);
+
+  if (video === currentAttachedVideo) return;
+  currentAttachedVideo = video;
 
   video.addEventListener("play", () => {
     sendVideoSync(false);
@@ -194,6 +199,22 @@ function initVideoListeners() {
     }
   });
 }
+
+// YouTube SPA Navigation Listeners (playlist transition, related video click, channel navigation)
+window.addEventListener("yt-navigate-finish", () => {
+  clearActiveCard();
+  currentAttachedVideo = null;
+  setTimeout(() => {
+    initVideoListeners();
+    sendVideoSync(true);
+  }, 500);
+});
+
+window.addEventListener("yt-page-data-updated", () => {
+  setTimeout(() => {
+    sendVideoSync(true);
+  }, 500);
+});
 
 // Initialize on DOM ready
 if (document.readyState === "loading") {
